@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 10px;
+        width: 320px;
+      }
+      label {
+        display: block;
+        margin-top: 12px;
+        margin-bottom: 4px;
+        font-size: 13px;
+      }
+      input[type="text"] {
+        width: 100%;
+        padding: 6px;
+        box-sizing: border-box;
+        font-size: 14px;
+      }
+      .buttons {
+        margin-top: 16px;
+        text-align: right;
+      }
+      button {
+        padding: 6px 16px;
+        font-size: 13px;
+        margin-left: 8px;
+      }
+      #errorMsg {
+        color: #d32f2f;
+        font-size: 12px;
+        margin-top: 8px;
+        display: none;
+      }
+      #queueArea {
+        margin-top: 20px;
+        border-top: 1px solid #eee;
+        padding-top: 10px;
+      }
+      #queueTitle {
+        font-size: 12px;
+        color: #666;
+        margin-bottom: 6px;
+      }
+      .queue-item {
+        display: flex;
+        align-items: center;
+        font-size: 13px;
+        padding: 4px 0;
+      }
+      .queue-icon {
+        width: 20px;
+        text-align: center;
+        margin-right: 6px;
+        flex-shrink: 0;
+      }
+      .queue-label {
+        flex-grow: 1;
+      }
+      .icon-pending { color: #aaa; }
+      .icon-processing {
+        display: inline-block;
+        width: 12px;
+        height: 12px;
+        border: 2px solid #ccc;
+        border-top-color: #4285f4;
+        border-radius: 50%;
+        animation: spin 0.8s linear infinite;
+      }
+      .icon-done { color: #34a853; }
+      .icon-error { color: #d32f2f; }
+      @keyframes spin {
+        to { transform: rotate(360deg); }
+      }
+      .queue-error-msg {
+        font-size: 11px;
+        color: #d32f2f;
+        margin-left: 26px;
+        margin-top: -2px;
+        margin-bottom: 4px;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="formArea">
+      <label for="code">銘柄コード</label>
+      <input type="text" id="code" placeholder="例: 7203">
+      <div id="dupMsg" style="color:#d32f2f; font-size:12px; margin-top:4px; display:none;"></div>
+      <label for="name">銘柄名</label>
+      <input type="text" id="name" placeholder="例: トヨタ自動車">
+
+      <div id="errorMsg"></div>
+
+      <div class="buttons">
+        <button id="closeBtn" onclick="handleClose()">閉じる</button>
+        <button id="submitBtn" onclick="submitForm()">追加</button>
+      </div>
+    </div>
+
+    <div id="queueArea" style="display:none;">
+      <div id="queueTitle">追加キュー</div>
+      <div id="queueList"></div>
+    </div>
+
+    <script>
+      // キュー本体。各要素: { code, name, status: 'pending'|'processing'|'done'|'error', message }
+      const queue = [];
+      let isProcessing = false;
+
+      window.addEventListener('load', function() {
+        document.getElementById('code').focus();
+      });
+
+      // 銘柄コード欄への入力のたびに、重複していないか確認する
+      let checkTimer = null;
+      document.getElementById('code').addEventListener('input', function() {
+        const code = this.value.trim();
+        const dupMsg = document.getElementById('dupMsg');
+
+        clearTimeout(checkTimer);
+
+        if (!code) {
+          dupMsg.style.display = 'none';
+          return;
+        }
+
+        // 入力が止まって0.5秒経ってから問い合わせる(打つたびに毎回問い合わせない)
+        checkTimer = setTimeout(function() {
+          google.script.run
+            .withSuccessHandler(function(result) {
+              if (result.exists) {
+                dupMsg.textContent = 'すでに登録されています(' + result.name + ')';
+                dupMsg.style.display = 'block';
+              } else {
+                dupMsg.style.display = 'none';
+              }
+            })
+            .withFailureHandler(function() {
+              dupMsg.style.display = 'none'; // 確認自体が失敗しても、入力の邪魔をしない
+            })
+            .checkStockCodeExists(code);
+        }, 500);
+      });
+
+      function submitForm() {
+        const codeInput = document.getElementById('code');
+        const nameInput = document.getElementById('name');
+        const code = codeInput.value.trim();
+        const name = nameInput.value.trim();
+        const errorMsg = document.getElementById('errorMsg');
+
+        if (!code || !name) {
+          errorMsg.textContent = '銘柄コードと銘柄名の両方を入力してください';
+          errorMsg.style.display = 'block';
+          return;
+        }
+
+        errorMsg.style.display = 'none';
+
+        // キューに追加
+        queue.push({ code: code, name: name, status: 'pending', message: '' });
+        renderQueue();
+
+        // 入力欄をクリアして、すぐ次の入力ができるようにする
+        codeInput.value = '';
+        nameInput.value = '';
+        codeInput.focus();
+
+        // まだ処理中でなければ、キューの処理を開始する
+        processQueue();
+      }
+
+      // 入力欄でEnterキーが押されたら「追加」ボタンと同じ動作にする
+      document.getElementById('code').addEventListener('keydown', handleEnterKey);
+      document.getElementById('name').addEventListener('keydown', handleEnterKey);
+
+      function handleEnterKey(event) {
+        if (event.key === 'Enter') {
+          event.preventDefault();
+          submitForm();
+        }
+      }
+
+      function processQueue() {
+        if (isProcessing) return; // すでに処理中なら何もしない(順番待ち)
+
+        const next = queue.find(function(item) { return item.status === 'pending'; });
+        if (!next) return; // 処理待ちの銘柄がなければ終了
+
+        isProcessing = true;
+        next.status = 'processing';
+        renderQueue();
+
+        google.script.run
+          .withSuccessHandler(function(message) {
+            next.status = 'done';
+            next.message = message;
+            isProcessing = false;
+            renderQueue();
+            processQueue(); // 次の待機中の銘柄を処理
+          })
+          .withFailureHandler(function(error) {
+            next.status = 'error';
+            next.message = error.message;
+            isProcessing = false;
+            renderQueue();
+            processQueue(); // エラーでも次に進む
+          })
+          .addNewStockFromDialog(next.code, next.name);
+      }
+
+      function renderQueue() {
+        const queueArea = document.getElementById('queueArea');
+        const queueList = document.getElementById('queueList');
+
+        if (queue.length === 0) {
+          queueArea.style.display = 'none';
+          return;
+        }
+
+        queueArea.style.display = 'block';
+        queueList.innerHTML = '';
+
+        queue.forEach(function(item) {
+          const row = document.createElement('div');
+          row.className = 'queue-item';
+
+          const icon = document.createElement('span');
+          icon.className = 'queue-icon';
+          if (item.status === 'pending') {
+            icon.className += ' icon-pending';
+            icon.textContent = '○';
+          } else if (item.status === 'processing') {
+            icon.innerHTML = '<span class="icon-processing"></span>';
+          } else if (item.status === 'done') {
+            icon.className += ' icon-done';
+            icon.textContent = '✓';
+          } else if (item.status === 'error') {
+            icon.className += ' icon-error';
+            icon.textContent = '✗';
+          }
+
+          const label = document.createElement('span');
+          label.className = 'queue-label';
+          label.textContent = item.code + '(' + item.name + ')';
+
+          row.appendChild(icon);
+          row.appendChild(label);
+          queueList.appendChild(row);
+
+          if (item.status === 'error' && item.message) {
+            const errRow = document.createElement('div');
+            errRow.className = 'queue-error-msg';
+            errRow.textContent = item.message;
+            queueList.appendChild(errRow);
+          }
+        });
+      }
+
+      function handleClose() {
+        const stillWorking = queue.some(function(item) {
+          return item.status === 'pending' || item.status === 'processing';
+        });
+
+        if (stillWorking) {
+          const ok = confirm('まだ処理中の銘柄があります。閉じても処理自体はバックグラウンドで続行されますが、結果を見届けずに閉じてよろしいですか?');
+          if (!ok) return;
+        }
+
+        google.script.host.close();
+      }
+    </script>
+  </body>
+</html>

@@ -1,0 +1,386 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script src="https://www.gstatic.com/charts/loader.js"></script>
+  <style>
+    body { margin: 0; font-family: Arial, sans-serif; }
+    #toolbar { display: flex; align-items: center; gap: 10px; padding: 8px 14px; border-bottom: 1px solid #e0e0e0; }
+    #toolbar label { font-size: 13px; color: #444; }
+    #periodSelect { font-size: 13px; padding: 3px 6px; }
+    #status { font-size: 12px; color: #777; }
+    #closeBtn { margin-left: auto; background: #f1f3f4; border: 1px solid #ccc; border-radius: 4px; padding: 5px 12px; font-size: 12px; cursor: pointer; }
+    .panel { width: 100%; height: 230px; box-sizing: border-box; }
+    .panel-note {
+      width: 100%; height: 230px; box-sizing: border-box; display: flex; align-items: center; justify-content: center;
+      color: #888; font-size: 13px; text-align: center; padding: 0 24px; border-bottom: 1px solid #f0f0f0;
+    }
+    #bands_chart { width: 100%; height: calc(100vh - 90px); min-height: 480px; }
+    #bands_note { padding: 8px 14px; color: #888; font-size: 12px; }
+  </style>
+  <script>
+    google.charts.load("current", {packages: ["corechart"]});
+
+    const initialBundle = <?!= bundleJson; ?>;
+    const seriesKind = "<?!= seriesKind; ?>";
+    const seriesId = "<?!= seriesId; ?>";
+    const initialPeriodDays = <?!= initialPeriodDays; ?>;
+
+    google.charts.setOnLoadCallback(function () {
+      render(initialBundle);
+    });
+
+    function hasExtraData(rows) {
+      return rows.some(function (r) { return r.extra !== undefined && r.extra !== null; });
+    }
+
+    // ==== panelsモード(空売り集計シートのボタンチャート: パネルを縦に積んで表示) ====
+    function renderPanel(containerEl, panel) {
+      const rows = panel.chartJson || [];
+      if (rows.length === 0) {
+        containerEl.className = 'panel-note';
+        containerEl.innerHTML = '';
+        containerEl.textContent = panel.note || (panel.titleText + ': データがありません');
+        return;
+      }
+      containerEl.className = 'panel';
+      containerEl.innerHTML = '';
+
+      const withExtra = hasExtraData(rows);
+
+      const dataTable = new google.visualization.DataTable();
+      dataTable.addColumn("string", "日付");
+      dataTable.addColumn("number", panel.closeLabel);
+      dataTable.addColumn({ type: "string", role: "tooltip", p: { html: true } });
+      dataTable.addColumn("number", panel.maPeriod + "日移動平均");
+      if (withExtra) dataTable.addColumn("number", panel.extraLabel);
+
+      rows.forEach(function (row) {
+        const maText = (row.ma !== null && row.ma !== undefined)
+          ? Math.round(row.ma).toLocaleString() + panel.closeUnit : '';
+        const extraText = (withExtra && row.extra !== undefined && row.extra !== null)
+          ? row.extra.toLocaleString() + panel.closeUnit : '';
+        const ratioText = (row.ratioInfo !== undefined && row.ratioInfo !== null)
+          ? row.ratioInfo.toFixed(2) + '%' : '';
+
+        const tooltipHtml = '<div style="padding:16px; font-family:Arial,sans-serif; font-size:24px; line-height:1.4;">' +
+          '<b>' + row.date + '</b><br/>' +
+          panel.closeLabel + ': <b>' + row.close.toLocaleString() + panel.closeUnit + '</b><br/>' +
+          '前日比: <span style="color:' + (row.change.indexOf('+') === 0 ? '#d93025' : (row.change.indexOf('-') === 0 ? '#1a73e8' : '#333')) + '">' + row.change + ' (' + row.rate + ')</span><br/>' +
+          (maText ? panel.maPeriod + '日移動平均: <b>' + maText + '</b><br/>' : '') +
+          (extraText ? panel.extraLabel + ': <b>' + extraText + '</b><br/>' : '') +
+          (ratioText ? '空売り比率(価格規制あり+なし): <b>' + ratioText + '</b>' : '') +
+          '</div>';
+
+        const cells = [row.date, row.close, tooltipHtml, row.ma];
+        if (withExtra) cells.push(row.extra !== undefined ? row.extra : null);
+        dataTable.addRow(cells);
+      });
+
+      const options = {
+        title: panel.titleText,
+        curveType: "function",
+        legend: { position: "bottom" },
+        colors: withExtra ? [panel.color, panel.maColor, panel.extraColor] : [panel.color, panel.maColor],
+        tooltip: { isHtml: true },
+        chartArea: { width: "78%", height: "62%" }
+      };
+
+      const chart = new google.visualization.LineChart(containerEl);
+      chart.draw(dataTable, options);
+    }
+
+    function renderPanelsMode(bundle) {
+      const container = document.getElementById('main_container');
+      container.innerHTML = '';
+      bundle.panels.forEach(function (panel, idx) {
+        const div = document.createElement('div');
+        div.id = 'panel_' + idx;
+        container.appendChild(div);
+        renderPanel(div, panel);
+      });
+    }
+
+    // ==== bandsモード(当月シートの終値ボタンチャート: 単位の異なる複数グループを1つのチャートに統合) ====
+    // 1つの軸(viewWindow)の表示範囲を実データより大きく取ることで、そのグループの線だけを
+    // チャート全体のうち指定した縦の帯(fracMin〜fracMax、0=下端・1=上端)に閉じ込め、他グループと重ならないようにする。
+
+    /** #rrggbbをrgba(...)に変換する(グリッド線を線の色に合わせた薄い色にするため) */
+    function hexToRgba_(hex, alpha) {
+      const h = hex.replace('#', '');
+      const r = parseInt(h.substring(0, 2), 16);
+      const g = parseInt(h.substring(2, 4), 16);
+      const b = parseInt(h.substring(4, 6), 16);
+      return 'rgba(' + r + ',' + g + ',' + b + ',' + alpha + ')';
+    }
+
+    /** 実データ範囲[dmin,dmax]の中に収まる、きりのいい間隔の目盛り値を数個計算する */
+    function computeNiceTicks_(dmin, dmax, targetCount) {
+      if (dmax <= dmin) return [dmin];
+      const rawStep = (dmax - dmin) / targetCount;
+      const mag = Math.pow(10, Math.floor(Math.log(rawStep) / Math.LN10));
+      const norm = rawStep / mag;
+      let niceNorm;
+      if (norm < 1.5) niceNorm = 1;
+      else if (norm < 3) niceNorm = 2;
+      else if (norm < 7) niceNorm = 5;
+      else niceNorm = 10;
+      const step = niceNorm * mag;
+      const start = Math.ceil(dmin / step) * step;
+      const ticks = [];
+      for (let v = start; v <= dmax + step * 1e-6; v += step) {
+        ticks.push(Math.round(v * 1000) / 1000);
+      }
+      if (ticks.length < 2) ticks.push(dmin, dmax);
+      return ticks;
+    }
+
+    function computeBandAxis(rows, keys, fracMin, fracMax, gridColor, textPosition, format) {
+      let dmin = null, dmax = null;
+      rows.forEach(function (r) {
+        keys.forEach(function (k) {
+          const v = r[k];
+          if (typeof v === 'number') {
+            if (dmin === null || v < dmin) dmin = v;
+            if (dmax === null || v > dmax) dmax = v;
+          }
+        });
+      });
+      if (dmin === null) { dmin = 0; dmax = 1; }
+      if (dmax === dmin) { dmax = dmin + Math.max(1, Math.abs(dmin) * 0.1); }
+      const bandHeight = fracMax - fracMin;
+      const range = (dmax - dmin) / bandHeight;
+      const axisMin = dmin - range * fracMin;
+      const ticks = computeNiceTicks_(dmin, dmax, 4);
+      return {
+        viewWindow: { min: axisMin, max: axisMin + range },
+        textPosition: textPosition || 'none',
+        textStyle: gridColor ? { color: gridColor, fontSize: 10 } : undefined,
+        format: format || '#,##0',
+        ticks: ticks,
+        gridlines: { color: gridColor ? hexToRgba_(gridColor, 0.3) : 'transparent', count: -1 },
+        minorGridlines: { count: 0 },
+        baselineColor: 'transparent'
+      };
+    }
+
+    function renderBandsMode(bundle) {
+      const container = document.getElementById('main_container');
+      container.innerHTML = '';
+
+      const rows = bundle.rows || [];
+      if (rows.length === 0) {
+        const div = document.createElement('div');
+        div.className = 'panel-note';
+        div.style.height = '560px';
+        div.textContent = bundle.note || 'データがありません';
+        container.appendChild(div);
+        return;
+      }
+
+      const chartDiv = document.createElement('div');
+      chartDiv.id = 'bands_chart';
+      container.appendChild(chartDiv);
+
+      if (bundle.note) {
+        const noteDiv = document.createElement('div');
+        noteDiv.id = 'bands_note';
+        noteDiv.textContent = bundle.note;
+        container.appendChild(noteDiv);
+      }
+
+      const seriesDefs = bundle.series;
+      // 縦軸の定義。bundle.axesがない(旧形式)場合は、系列ごとに1本ずつ軸を持たせる
+      seriesDefs.forEach(function (sd, i) { if (sd.axisIndex === undefined) sd.axisIndex = i; });
+      const axesDefs = bundle.axes || seriesDefs.map(function (sd, i) {
+        return { band: sd.band, color: sd.color, position: i === 0 ? 'left' : (i === 1 ? 'right' : 'inner') };
+      });
+
+      const dataTable = new google.visualization.DataTable();
+      dataTable.addColumn('string', '日付');
+
+      const colors = [];
+      const seriesOpt = {};
+      const vAxes = {};
+      const manualLabelAxes = []; // position=inner の軸: プロットエリア内側・左寄りに自前で数値を描画する対象
+      const axisKeys = axesDefs.map(function () { return []; });
+      let seriesIdx = 0;
+
+      seriesDefs.forEach(function (sd) {
+        dataTable.addColumn('number', sd.label);
+        colors.push(sd.color);
+        seriesOpt[seriesIdx] = { targetAxisIndex: sd.axisIndex };
+        seriesIdx++;
+        axisKeys[sd.axisIndex].push(sd.key);
+
+        dataTable.addColumn({ type: 'string', role: 'tooltip', p: { html: true } });
+
+        if (sd.maKey) {
+          dataTable.addColumn('number', sd.label + '(' + (sd.maPeriod || 25) + '日移動平均)');
+          colors.push(sd.maColor);
+          seriesOpt[seriesIdx] = { targetAxisIndex: sd.axisIndex };
+          seriesIdx++;
+          axisKeys[sd.axisIndex].push(sd.maKey);
+        }
+      });
+
+      // 軸ごとに、所属する全系列の値の範囲から帯の位置(viewWindow)と目盛りを決める。
+      // left=左外側、right=右外側(Google Chartsが自動で配置できる2箇所。軸0が左、軸1が右に出る)。
+      // inner=物理的な余白がないため、ネイティブのラベルは消し、描画後にプロットエリア内側の左寄りへ自前で重ねて描画する。
+      axesDefs.forEach(function (ax, axisIdx) {
+        const textPosition = (ax.position === 'left' || ax.position === 'right') ? 'out' : 'none';
+        const axisConfig = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format);
+        vAxes[axisIdx] = axisConfig;
+        if (ax.position === 'inner') {
+          manualLabelAxes.push({ axisIndex: axisIdx, ticks: axisConfig.ticks, color: ax.color });
+        }
+      });
+
+      rows.forEach(function (row) {
+        const cells = [row.date];
+        seriesDefs.forEach(function (sd) {
+          const value = row[sd.key];
+          cells.push(value !== undefined ? value : null);
+          cells.push(buildBandTooltipHtml_(row, sd));
+          if (sd.maKey) cells.push(row[sd.maKey] !== undefined ? row[sd.maKey] : null);
+        });
+        dataTable.addRow(cells);
+      });
+
+      const options = {
+        title: bundle.titleText,
+        curveType: 'function',
+        legend: { position: 'bottom' },
+        colors: colors,
+        series: seriesOpt,
+        vAxes: vAxes,
+        tooltip: { isHtml: true },
+        chartArea: { width: '76%', height: '82%' }
+      };
+
+      const chart = new google.visualization.LineChart(chartDiv);
+
+      if (manualLabelAxes.length > 0) {
+        google.visualization.events.addListener(chart, 'ready', function () {
+          drawManualInnerAxisLabels_(chart, chartDiv, manualLabelAxes);
+        });
+      }
+
+      chart.draw(dataTable, options);
+    }
+
+    /**
+     * 軸2以降(プロットエリア内側・左寄り)の数値ラベルを、Googleチャート描画後に
+     * 自前のHTML要素として重ねて描画する(ネイティブのvAxisは左右2本分しか位置指定できないため)。
+     */
+    function drawManualInnerAxisLabels_(chart, chartDiv, manualLabelAxes) {
+      chartDiv.querySelectorAll('.manual-axis-label').forEach(function (el) { el.remove(); });
+
+      let layout;
+      try {
+        layout = chart.getChartLayoutInterface();
+      } catch (e) {
+        return;
+      }
+      const chartArea = layout.getChartAreaBoundingBox();
+      chartDiv.style.position = 'relative';
+
+      manualLabelAxes.forEach(function (axisInfo) {
+        axisInfo.ticks.forEach(function (v) {
+          let y;
+          try {
+            y = layout.getYLocation(v, axisInfo.axisIndex);
+          } catch (e) {
+            return;
+          }
+          if (y === undefined || y === null || isNaN(y)) return;
+
+          const label = document.createElement('span');
+          label.className = 'manual-axis-label';
+          label.textContent = Math.abs(v) < 10 ? v.toLocaleString(undefined, { maximumFractionDigits: 3 }) : Math.round(v).toLocaleString();
+          label.style.position = 'absolute';
+          // グラフの外側(左の余白)に、右端をプロットエリアの左端にそろえて表示する
+          // (左の余白は上段の終値の目盛りしか使っていないため、中段・下段の高さは空いている)
+          label.style.left = (chartArea.left - 6) + 'px';
+          label.style.transform = 'translateX(-100%)';
+          label.style.top = (y - 7) + 'px';
+          label.style.fontSize = '10px';
+          label.style.color = axisInfo.color;
+          label.style.padding = '0 2px';
+          label.style.pointerEvents = 'none';
+          label.style.whiteSpace = 'nowrap';
+          chartDiv.appendChild(label);
+        });
+      });
+    }
+
+    /** bandsモード用: 1つのグループ(終値/業種/空売りなど)についての、その行のツールチップHTMLを組み立てる。 */
+    function buildBandTooltipHtml_(row, sd) {
+      const value = row[sd.key];
+      if (value === undefined || value === null) return '';
+      const maValue = sd.maKey ? row[sd.maKey] : null;
+      const change = sd.changeKey ? row[sd.changeKey] : null;
+      const rate = sd.rateKey ? row[sd.rateKey] : null;
+      const ratioInfo = sd.ratioKey ? row[sd.ratioKey] : null;
+
+      let html = '<div style="padding:16px; font-family:Arial,sans-serif; font-size:24px; line-height:1.4;">' +
+        '<b>' + row.date + '</b><br/>' +
+        sd.label + ': <b>' + value.toLocaleString(undefined, { maximumFractionDigits: 3 }) + sd.unit + '</b><br/>';
+      if (change) {
+        html += '前日比: <span style="color:' + (change.indexOf('+') === 0 ? '#d93025' : (change.indexOf('-') === 0 ? '#1a73e8' : '#333')) + '">' + change + ' (' + rate + ')</span><br/>';
+      }
+      if (maValue !== null && maValue !== undefined) {
+        html += (sd.maPeriod || 25) + '日移動平均: <b>' + (Math.abs(maValue) < 10 ? maValue.toLocaleString(undefined, { maximumFractionDigits: 3 }) : Math.round(maValue).toLocaleString()) + sd.unit + '</b><br/>';
+      }
+      if (ratioInfo !== null && ratioInfo !== undefined) {
+        html += '空売り比率(価格規制あり+なし): <b>' + ratioInfo.toFixed(2) + '%</b>';
+      }
+      html += '</div>';
+      return html;
+    }
+
+    function render(bundle) {
+      if (bundle.mode === 'bands') renderBandsMode(bundle);
+      else renderPanelsMode(bundle);
+    }
+  </script>
+</head>
+<body>
+  <div id="toolbar">
+    <label for="periodSelect">参照期間:</label>
+    <select id="periodSelect">
+      <option value="30">1ヶ月</option>
+      <option value="90">3ヶ月</option>
+      <option value="180">6ヶ月</option>
+      <option value="365">1年</option>
+      <option value="0">全期間</option>
+    </select>
+    <span id="status"></span>
+    <button id="closeBtn" type="button" onclick="google.script.host.close()">閉じる</button>
+  </div>
+  <div id="main_container"></div>
+
+  <script>
+    document.addEventListener('DOMContentLoaded', function () {
+      const select = document.getElementById('periodSelect');
+      select.value = String(initialPeriodDays);
+
+      select.addEventListener('change', function () {
+        const days = this.value;
+        const statusEl = document.getElementById('status');
+        statusEl.textContent = '読み込み中…';
+        google.script.run
+          .withSuccessHandler(function (bundle) {
+            statusEl.textContent = '';
+            render(bundle);
+          })
+          .withFailureHandler(function (err) {
+            statusEl.textContent = '';
+            alert('エラー: ' + (err.message || err));
+          })
+          .fetchChartDataForPeriod(seriesKind, seriesId, days);
+      });
+    });
+  </script>
+</body>
+</html>

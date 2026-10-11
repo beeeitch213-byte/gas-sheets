@@ -1,0 +1,85 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; margin: 12px; }
+    .row { margin-bottom: 10px; }
+    label { display: block; margin-bottom: 4px; color: #444; }
+    input[type="date"] { width: 100%; box-sizing: border-box; padding: 5px; font-size: 13px; }
+    .hint { color: #777; font-size: 11px; margin-top: 2px; }
+    .buttons { margin-top: 14px; display: flex; gap: 8px; }
+    button { flex: 1; padding: 8px; font-size: 13px; cursor: pointer; }
+    #runBtn { background: #4285f4; color: #fff; border: none; border-radius: 4px; }
+    #runBtn:disabled { background: #a7c4f5; cursor: default; }
+    #todayBtn { background: #f1f3f4; border: 1px solid #ccc; border-radius: 4px; }
+    #result { margin-top: 14px; white-space: pre-wrap; font-size: 12px; background: #f8f8f8; border: 1px solid #ddd; border-radius: 4px; padding: 8px; max-height: 160px; overflow-y: auto; display: none; }
+    #status { margin-top: 10px; font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <label for="startDate">開始日(単日のみの場合はこちらだけでOK)</label>
+    <input type="date" id="startDate">
+  </div>
+  <div class="row">
+    <label for="endDate">終了日(期間を指定する場合のみ入力)</label>
+    <input type="date" id="endDate">
+    <div class="hint">終了日を空にすると、開始日1日分だけを更新します。新しい日付のデータほどシート上部に追加されます。</div>
+  </div>
+
+  <div class="buttons">
+    <button id="todayBtn" type="button">本日にする</button>
+    <button id="runBtn" type="button">更新を実行</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="result"></div>
+
+  <script>
+    function todayStr() {
+      var d = new Date();
+      var m = ('0' + (d.getMonth() + 1)).slice(-2);
+      var day = ('0' + d.getDate()).slice(-2);
+      return d.getFullYear() + '-' + m + '-' + day;
+    }
+    document.getElementById('startDate').value = todayStr();
+
+    document.getElementById('todayBtn').addEventListener('click', function() {
+      document.getElementById('startDate').value = todayStr();
+      document.getElementById('endDate').value = '';
+    });
+
+    document.getElementById('runBtn').addEventListener('click', function() {
+      var start = document.getElementById('startDate').value;
+      var end = document.getElementById('endDate').value || start;
+      if (!start) { alert('開始日を入力してください'); return; }
+      if (end < start) { alert('終了日は開始日より後にしてください'); return; }
+
+      var btn = document.getElementById('runBtn');
+      btn.disabled = true;
+      document.getElementById('status').textContent = '更新中です。しばらくお待ちください…(期間が長いと数分かかります)';
+      document.getElementById('result').style.display = 'none';
+
+      google.script.run
+        .withSuccessHandler(function(message) {
+          btn.disabled = false;
+          document.getElementById('status').textContent = '完了しました。このダイアログは自動的に閉じます。';
+          var resultEl = document.getElementById('result');
+          resultEl.textContent = message;
+          resultEl.style.display = 'block';
+          setTimeout(function() { google.script.host.close(); }, 3000);
+        })
+        .withFailureHandler(function(err) {
+          btn.disabled = false;
+          document.getElementById('status').textContent = 'エラーが発生しました。このダイアログは自動的に閉じます。';
+          var resultEl = document.getElementById('result');
+          resultEl.textContent = err.message || String(err);
+          resultEl.style.display = 'block';
+          setTimeout(function() { google.script.host.close(); }, 5000);
+        })
+        .runUpdateShortSellForDateFromDialog(start, end);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 14px;
+        width: 500px;
+      }
+      .row {
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+        margin-bottom: 14px;
+      }
+      .row label {
+        font-size: 13px;
+      }
+      input[type="color"] {
+        width: 50px;
+        height: 30px;
+        border: 1px solid #ccc;
+        border-radius: 4px;
+        cursor: pointer;
+      }
+      .section-title {
+        font-size: 12px;
+        color: #666;
+        margin: 16px 0 8px;
+        border-bottom: 1px solid #eee;
+        padding-bottom: 4px;
+      }
+      .buttons {
+        margin-top: 20px;
+        text-align: right;
+      }
+      button {
+        padding: 6px 16px;
+        font-size: 13px;
+        margin-left: 8px;
+      }
+      #statusMsg {
+        font-size: 12px;
+        margin-top: 10px;
+        display: none;
+      }
+      .palette {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 4px;
+        margin-top: 8px;
+      }
+      .palette-color {
+        width: 20px;
+        height: 20px;
+        border-radius: 3px;
+        cursor: pointer;
+        border: 1px solid rgba(0,0,0,0.15);
+      }
+      .palette-color:hover {
+        outline: 2px solid #4285f4;
+        outline-offset: 1px;
+      }
+
+    </style>
+  </head>
+  <body>
+    <div class="section-title">前日比の色</div>
+    <div class="row">
+      <label>プラス(上昇)</label>
+      <input type="color" id="changeUpColor">
+    </div>
+    <div class="palette" data-target="changeUpColor"></div>
+    <div class="row">
+      <label>マイナス(下落)</label>
+      <input type="color" id="changeDownColor">
+    </div>
+    <div class="palette" data-target="changeDownColor"></div>
+    <div class="row">
+      <label>変化なし(±0.01未満)</label>
+      <input type="color" id="changeFlatColor">
+    </div>
+    <div class="palette" data-target="changeFlatColor"></div>
+
+    <div class="section-title">信用倍率の色</div>
+    <div class="row">
+      <label>1.0以上</label>
+      <input type="color" id="ratioHighColor">
+    </div>
+    <div class="palette" data-target="ratioHighColor"></div>
+    <div class="row">
+      <label>1.0未満</label>
+      <input type="color" id="ratioLowColor">
+    </div>
+    <div class="palette" data-target="ratioLowColor"></div>
+
+    <div id="statusMsg"></div>
+
+    <div class="buttons">
+      <button onclick="google.script.host.close()">閉じる</button>
+      <button onclick="applyColors()">保存して今すぐ反映</button>
+    </div>
+
+    <script>
+      window.addEventListener('load', function() {
+      // Googleスプレッドシート標準カラーパレットに近い色の一覧
+      const STANDARD_PALETTE = [
+        '#000000', '#434343', '#666666', '#999999', '#b7b7b7', '#cccccc', '#d9d9d9', '#efefef', '#f3f3f3', '#ffffff',
+        '#980000', '#ff0000', '#ff9900', '#ffff00', '#00ff00', '#00ffff', '#4a86e8', '#0000ff', '#9900ff', '#ff00ff',
+        '#e6b8af', '#f4cccc', '#fce5cd', '#fff2cc', '#d9ead3', '#d0e0e3', '#c9daf8', '#cfe2f3', '#d9d2e9', '#ead1dc',
+        '#dd7e6b', '#ea9999', '#f9cb9c', '#ffe599', '#b6d7a8', '#a2c4c9', '#a4c2f4', '#9fc5e8', '#b4a7d6', '#d5a6bd',
+        '#cc4125', '#e06666', '#f6b26b', '#ffd966', '#93c47d', '#76a5af', '#6d9eeb', '#6fa8dc', '#8e7cc3', '#c27ba0',
+        '#a61c00', '#cc0000', '#e69138', '#f1c232', '#6aa84f', '#45818e', '#3c78d8', '#3d85c6', '#674ea7', '#a64d79'
+      ];
+
+      // 各パレット要素にスウォッチ(色見本)を生成し、クリックで対応する入力欄に反映する
+      document.querySelectorAll('.palette').forEach(function(paletteEl) {
+        const targetId = paletteEl.dataset.target;
+
+        STANDARD_PALETTE.forEach(function(color) {
+          const swatch = document.createElement('div');
+          swatch.className = 'palette-color';
+          swatch.style.backgroundColor = color;
+          swatch.title = color;
+          swatch.addEventListener('click', function() {
+            document.getElementById(targetId).value = color;
+          });
+          paletteEl.appendChild(swatch);
+        });
+      });
+              
+        google.script.run
+          .withSuccessHandler(function(settings) {
+            document.getElementById('changeUpColor').value = settings.changeUpColor;
+            document.getElementById('changeDownColor').value = settings.changeDownColor;
+            document.getElementById('changeFlatColor').value = settings.changeFlatColor;
+            document.getElementById('ratioHighColor').value = settings.ratioHighColor;
+            document.getElementById('ratioLowColor').value = settings.ratioLowColor;
+          })
+          .getColorSettings();
+      });
+
+      function applyColors() {
+        const settings = {
+          changeUpColor: document.getElementById('changeUpColor').value,
+          changeDownColor: document.getElementById('changeDownColor').value,
+          changeFlatColor: document.getElementById('changeFlatColor').value,
+          ratioHighColor: document.getElementById('ratioHighColor').value,
+          ratioLowColor: document.getElementById('ratioLowColor').value
+        };
+
+        const statusMsg = document.getElementById('statusMsg');
+        statusMsg.style.display = 'block';
+        statusMsg.style.color = '#333';
+        statusMsg.textContent = '反映中...';
+
+        google.script.run
+          .withSuccessHandler(function(message) {
+            statusMsg.style.color = '#34a853';
+            statusMsg.textContent = '完了: ' + message;
+          })
+          .withFailureHandler(function(err) {
+            statusMsg.style.color = '#d32f2f';
+            statusMsg.textContent = 'エラー: ' + err.message;
+          })
+          .saveAndApplyColorSettings(settings);
+      }
+    </script>
+  </body>
+</html>

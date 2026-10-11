@@ -1,0 +1,135 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; margin: 12px; }
+    .row { margin-bottom: 10px; }
+    label { display: block; margin-bottom: 4px; color: #444; }
+    select { width: 100%; box-sizing: border-box; padding: 5px; font-size: 13px; }
+    .hint { color: #777; font-size: 11px; margin-top: 2px; }
+    .checkboxRow { display: flex; align-items: center; gap: 6px; }
+    .checkboxRow label { margin-bottom: 0; }
+    .buttons { margin-top: 14px; display: flex; gap: 8px; }
+    button { flex: 1; padding: 8px; font-size: 13px; cursor: pointer; }
+    #runBtn { background: #4285f4; color: #fff; border: none; border-radius: 4px; }
+    #runBtn:disabled { background: #a7c4f5; cursor: default; }
+    #result { margin-top: 14px; white-space: pre-wrap; font-size: 12px; background: #f8f8f8; border: 1px solid #ddd; border-radius: 4px; padding: 8px; max-height: 180px; overflow-y: auto; display: none; }
+    #status { margin-top: 10px; font-size: 12px; color: #555; }
+  </style>
+</head>
+<body>
+  <div class="row">
+    <label for="yearSelect">年</label>
+    <select id="yearSelect"></select>
+  </div>
+  <div class="row">
+    <label for="startWeekSelect">開始週</label>
+    <select id="startWeekSelect"></select>
+    <div class="hint">既存のJPXページから実際に存在する週だけを一覧表示します(最新週が先頭)。</div>
+  </div>
+  <div class="row">
+    <label for="endWeekSelect">終了週(複数週をまとめて取得する場合のみ選択)</label>
+    <select id="endWeekSelect">
+      <option value="">(開始週のみ)</option>
+    </select>
+    <div class="hint">開始週・終了週は同じ年の中から選んでください。</div>
+  </div>
+  <div class="row checkboxRow">
+    <input type="checkbox" id="forceRefetch">
+    <label for="forceRefetch">既に取得済みの週も再取得する</label>
+  </div>
+
+  <div class="buttons">
+    <button id="runBtn" type="button">更新を実行</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="result"></div>
+
+  <script>
+    var yearSelect = document.getElementById('yearSelect');
+    var startWeekSelect = document.getElementById('startWeekSelect');
+    var endWeekSelect = document.getElementById('endWeekSelect');
+    var runBtn = document.getElementById('runBtn');
+    var statusEl = document.getElementById('status');
+    var resultEl = document.getElementById('result');
+
+    var thisYear = new Date().getFullYear();
+    for (var y = thisYear; y >= thisYear - 10; y--) {
+      var opt = document.createElement('option');
+      opt.value = y;
+      opt.textContent = y + '年';
+      yearSelect.appendChild(opt);
+    }
+
+    function loadWeeksForYear(year) {
+      startWeekSelect.innerHTML = '';
+      endWeekSelect.innerHTML = '<option value="">(開始週のみ)</option>';
+      statusEl.textContent = '週の一覧を取得中…';
+      runBtn.disabled = true;
+      google.script.run
+        .withSuccessHandler(function(weeks) {
+          runBtn.disabled = false;
+          statusEl.textContent = '';
+          if (!weeks || weeks.length === 0) {
+            var opt = document.createElement('option');
+            opt.textContent = '(この年の週は見つかりませんでした)';
+            startWeekSelect.appendChild(opt);
+            return;
+          }
+          weeks.forEach(function(w) {
+            var opt1 = document.createElement('option');
+            opt1.value = w.startDateStr;
+            opt1.textContent = w.label;
+            startWeekSelect.appendChild(opt1);
+
+            var opt2 = document.createElement('option');
+            opt2.value = w.startDateStr;
+            opt2.textContent = w.label;
+            endWeekSelect.appendChild(opt2);
+          });
+        })
+        .withFailureHandler(function(err) {
+          runBtn.disabled = false;
+          statusEl.textContent = '週の一覧取得に失敗しました: ' + (err.message || err);
+        })
+        .listJpxWeeksForYearUI(year);
+    }
+
+    yearSelect.addEventListener('change', function() {
+      loadWeeksForYear(yearSelect.value);
+    });
+    loadWeeksForYear(yearSelect.value);
+
+    runBtn.addEventListener('click', function() {
+      var start = startWeekSelect.value;
+      var end = endWeekSelect.value || start;
+      var forceRefetch = document.getElementById('forceRefetch').checked;
+      if (!start) { alert('開始週を選択してください'); return; }
+      if (end < start) { var t = start; start = end; end = t; } // 一覧は新しい順なので、選択順が逆でも自動で入れ替える
+
+      runBtn.disabled = true;
+      statusEl.textContent = '更新中です。しばらくお待ちください…(複数週の場合は数分かかります)';
+      resultEl.style.display = 'none';
+
+      google.script.run
+        .withSuccessHandler(function(message) {
+          runBtn.disabled = false;
+          statusEl.textContent = '完了しました。このダイアログは自動的に閉じます。';
+          resultEl.textContent = message;
+          resultEl.style.display = 'block';
+          setTimeout(function() { google.script.host.close(); }, 4000);
+        })
+        .withFailureHandler(function(err) {
+          runBtn.disabled = false;
+          statusEl.textContent = 'エラーが発生しました。このダイアログは自動的に閉じます。';
+          resultEl.textContent = err.message || String(err);
+          resultEl.style.display = 'block';
+          setTimeout(function() { google.script.host.close(); }, 6000);
+        })
+        .runUpdateJpxStatsForDateFromDialog(start, end, forceRefetch);
+    });
+  </script>
+</body>
+</html>

@@ -1,0 +1,166 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        padding: 10px;
+        width: 300px;
+      }
+      #hint {
+        font-size: 12px;
+        color: #666;
+        margin-bottom: 10px;
+      }
+      #sortList {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        max-height: 640px;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      #sortList li {
+        padding: 8px 10px;
+        border-bottom: 1px solid #eee;
+        cursor: grab;
+        background: #fff;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+      }
+      #sortList li:last-child {
+        border-bottom: none;
+      }
+      #sortList li.dragging {
+        opacity: 0.4;
+      }
+      #sortList li.drag-over {
+        border-top: 2px solid #4285f4;
+      }
+      .drag-handle {
+        margin-right: 8px;
+        color: #999;
+      }
+      .buttons {
+        margin-top: 16px;
+        text-align: right;
+      }
+      button {
+        padding: 6px 16px;
+        font-size: 13px;
+        margin-left: 8px;
+      }
+      #statusMsg {
+        font-size: 12px;
+        margin-top: 8px;
+        display: none;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="hint">ドラッグして順番を並び替えてください</div>
+    <ul id="sortList"></ul>
+
+    <div id="statusMsg"></div>
+
+    <div class="buttons">
+      <button id="closeBtn" onclick="google.script.host.close()">閉じる</button>
+      <button id="applyBtn" onclick="applyOrder()">この順番で適用</button>
+    </div>
+
+    <script>
+      let draggingEl = null;
+
+      window.addEventListener('load', function() {
+        google.script.run
+          .withSuccessHandler(renderList)
+          .withFailureHandler(function(err) {
+            document.getElementById('hint').textContent = '読み込みに失敗しました: ' + err.message;
+          })
+          .getCurrentStockOrder();
+      });
+
+      function renderList(items) {
+        const list = document.getElementById('sortList');
+        list.innerHTML = '';
+
+        items.forEach(function(item) {
+          const li = document.createElement('li');
+          li.draggable = true;
+          li.dataset.code = item.code;
+          li.innerHTML = '<span class="drag-handle">≡</span>' + item.code + '(' + item.name + ')';
+
+          li.addEventListener('dragstart', function() {
+            draggingEl = li;
+            li.classList.add('dragging');
+          });
+
+          li.addEventListener('dragend', function() {
+            li.classList.remove('dragging');
+            draggingEl = null;
+            Array.from(list.children).forEach(function(el) {
+              el.classList.remove('drag-over');
+            });
+          });
+
+          li.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            if (li !== draggingEl) {
+              li.classList.add('drag-over');
+            }
+          });
+
+          li.addEventListener('dragleave', function() {
+            li.classList.remove('drag-over');
+          });
+
+          li.addEventListener('drop', function(e) {
+            e.preventDefault();
+            li.classList.remove('drag-over');
+            if (draggingEl && draggingEl !== li) {
+              const rect = li.getBoundingClientRect();
+              const insertAfter = (e.clientY - rect.top) > rect.height / 2;
+              if (insertAfter) {
+                li.after(draggingEl);
+              } else {
+                li.before(draggingEl);
+              }
+            }
+          });
+
+          list.appendChild(li);
+        });
+      }
+
+      function applyOrder() {
+        const items = document.querySelectorAll('#sortList li');
+        const orderedCodes = Array.from(items).map(function(li) {
+          return li.dataset.code;
+        });
+
+        const statusMsg = document.getElementById('statusMsg');
+        const applyBtn = document.getElementById('applyBtn');
+        applyBtn.disabled = true;
+        statusMsg.style.display = 'block';
+        statusMsg.style.color = '#333';
+        statusMsg.textContent = '適用中...';
+
+        google.script.run
+          .withSuccessHandler(function(message) {
+            statusMsg.style.color = '#34a853';
+            statusMsg.textContent = message;
+            applyBtn.disabled = false;
+          })
+          .withFailureHandler(function(err) {
+            statusMsg.style.color = '#d32f2f';
+            statusMsg.textContent = 'エラー: ' + err.message;
+            applyBtn.disabled = false;
+          })
+          .reorderBothSheets(orderedCodes);
+      }
+    </script>
+  </body>
+</html>

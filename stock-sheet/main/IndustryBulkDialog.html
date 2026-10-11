@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; margin: 12px; }
+    .select-all-row { display: flex; align-items: center; gap: 6px; padding: 6px 4px; border-bottom: 1px solid #ddd; margin-bottom: 4px; }
+    .select-all-row label { font-weight: bold; }
+    #stockList { max-height: 380px; overflow-y: auto; border: 1px solid #ddd; border-radius: 4px; padding: 4px; }
+    .stock-row { display: flex; align-items: center; gap: 8px; padding: 4px 6px; }
+    .stock-row:hover { background: #f5f5f5; }
+    .stock-row label { flex: 1; cursor: pointer; }
+    .stock-code { color: #777; font-size: 11px; margin-left: 4px; }
+    .buttons { margin-top: 14px; display: flex; gap: 8px; }
+    button { flex: 1; padding: 8px; font-size: 13px; cursor: pointer; }
+    #runBtn { background: #4285f4; color: #fff; border: none; border-radius: 4px; }
+    #runBtn:disabled { background: #a7c4f5; cursor: default; }
+    #status { margin-top: 10px; font-size: 12px; color: #555; }
+    #result { margin-top: 10px; white-space: pre-wrap; font-size: 12px; background: #f8f8f8; border: 1px solid #ddd; border-radius: 4px; padding: 8px; max-height: 160px; overflow-y: auto; display: none; }
+  </style>
+</head>
+<body>
+  <div class="select-all-row">
+    <input type="checkbox" id="selectAll">
+    <label for="selectAll">すべて選択</label>
+  </div>
+  <div id="stockList"></div>
+
+  <div class="buttons">
+    <button id="runBtn" type="button">選択した銘柄の業種を取得</button>
+  </div>
+
+  <div id="status"></div>
+  <div id="result"></div>
+
+  <script>
+    const stocks = <?!= stocksJson; ?>;
+
+    const listEl = document.getElementById('stockList');
+    stocks.forEach(function (s, idx) {
+      const row = document.createElement('div');
+      row.className = 'stock-row';
+      row.innerHTML =
+        '<input type="checkbox" class="stock-check" id="stock_' + idx + '" value="' + s.code + '">' +
+        '<label for="stock_' + idx + '">' + s.name + '<span class="stock-code">' + s.code + '</span></label>';
+      listEl.appendChild(row);
+    });
+
+    const checkboxes = document.querySelectorAll('.stock-check');
+
+    document.getElementById('selectAll').addEventListener('change', function () {
+      checkboxes.forEach(function (cb) { cb.checked = this.checked; }, this);
+    });
+
+    document.getElementById('runBtn').addEventListener('click', function () {
+      const codes = Array.prototype.slice.call(checkboxes).filter(function (cb) { return cb.checked; }).map(function (cb) { return cb.value; });
+      if (codes.length === 0) { alert('銘柄を1つ以上選択してください'); return; }
+
+      const btn = document.getElementById('runBtn');
+      btn.disabled = true;
+      document.getElementById('status').textContent = codes.length + '件を取得中です。しばらくお待ちください…';
+      document.getElementById('result').style.display = 'none';
+
+      google.script.run
+        .withSuccessHandler(function (message) {
+          btn.disabled = false;
+          document.getElementById('status').textContent = '完了しました。';
+          const resultEl = document.getElementById('result');
+          resultEl.textContent = message;
+          resultEl.style.display = 'block';
+        })
+        .withFailureHandler(function (err) {
+          btn.disabled = false;
+          document.getElementById('status').textContent = 'エラーが発生しました。';
+          const resultEl = document.getElementById('result');
+          resultEl.textContent = err.message || String(err);
+          resultEl.style.display = 'block';
+        })
+        .runIndustryBulkFetch(codes);
+    });
+  </script>
+</body>
+</html>
