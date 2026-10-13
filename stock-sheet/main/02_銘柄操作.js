@@ -428,7 +428,24 @@ function sanitizeRowsForApi(rows) {
 }
 
 /**
+ * 並べ替え後に中身が変わる位置(0始まり)の範囲を {first, last} で返す(変わらなければnull)。
+ * 1つの銘柄を動かしただけなら、動かした位置の間だけを書き込めばよい。
+ * hasData(code)がfalseの銘柄(このシートに無い銘柄)は書き込まれないので、変化なしとして扱う。
+ */
+function getReorderChangedRange_(currentCodes, orderSet, hasData) {
+  let first = -1, last = -1;
+  for (let i = 0; i < currentCodes.length; i++) {
+    if (hasData(orderSet[i]) && orderSet[i] !== currentCodes[i]) {
+      if (first === -1) first = i;
+      last = i;
+    }
+  }
+  return first === -1 ? null : { first: first, last: last };
+}
+
+/**
  * 並び替えペイロード生成。列位置は固定し中身だけ入れ替える。
+ * 書き込むのは中身が変わる銘柄ブロックの範囲だけ(A〜K列や、動かない銘柄の列は送らない)。
  */
 function getReorderPayloadForSheet(sheet, orderedCodes) {
   if (!sheet) return null;
@@ -470,11 +487,18 @@ function getReorderPayloadForSheet(sheet, orderedCodes) {
     bodyValues.forEach((row, r) => bodyBlocks[code][r].forEach((v, k) => { row[targetCol - 1 + k] = v; }));
   }
 
+  const changed = getReorderChangedRange_(currentCodes, orderSet, code => !!headerBlocks[code]);
+  if (!changed) return { status: sheet.getName() + ': スキップ(変更なし)' };
+  const firstCol = STOCK_START_COL + changed.first * STOCK_COL_WIDTH;
+  const endCol = STOCK_START_COL + (changed.last + 1) * STOCK_COL_WIDTH - 1;
+  const pickCols = rows => sanitizeRowsForApi(rows.map(row => row.slice(firstCol - 1, endCol)));
+  const colRange = (fromRow, toRow) => "'" + sheet.getName() + "'!" + columnToLetter(firstCol) + fromRow + ':' + columnToLetter(endCol) + toRow;
+
   return {
     status: sheet.getName() + ': 並び替え準備完了',
     payloads: [
-      { range: "'" + sheet.getName() + "'!A2:" + columnToLetter(lastCol) + "3", values: sanitizeRowsForApi(headerValues) },
-      { range: "'" + sheet.getName() + "'!A5:" + columnToLetter(lastCol) + lastRow, values: sanitizeRowsForApi(bodyValues) }
+      { range: colRange(2, 3), values: pickCols(headerValues) },
+      { range: colRange(5, lastRow), values: pickCols(bodyValues) }
     ]
   };
 }
@@ -515,10 +539,18 @@ function getReorderPayloadForDatabase(dbSheet, orderedCodes) {
     data.forEach((row, r) => { row[targetCol - 1] = colBlocks[code][r]; });
   }
 
+  // 書き込むのは中身が変わる列の範囲だけ(日付のA列や、動かない銘柄の列は送らない)
+  const changed = getReorderChangedRange_(currentCodes, orderSet, code => !!colBlocks[code]);
+  if (!changed) return { status: 'データベース: スキップ(変更なし)' };
+  const firstCol = 2 + changed.first, endCol = 2 + changed.last;
+
   return {
     status: 'データベース: 並び替え準備完了',
     payloads: [
-      { range: "'" + dbSheet.getName() + "'!A1:" + columnToLetter(lastCol) + lastRow, values: sanitizeRowsForApi(data) }
+      {
+        range: "'" + dbSheet.getName() + "'!" + columnToLetter(firstCol) + '1:' + columnToLetter(endCol) + lastRow,
+        values: sanitizeRowsForApi(data.map(row => row.slice(firstCol - 1, endCol)))
+      }
     ]
   };
 }
@@ -570,8 +602,8 @@ function getCurrentStockOrder() {
   const sheet = getTargetSheet(new Date());
   if (!sheet) return [];
   const lastCol = sheet.getLastColumn();
-  const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
-  const nameRow = sheet.getRange(3, 1, 1, lastCol).getValues()[0];
+  const headRows = sheet.getRange(2, 1, 2, lastCol).getValues(); // 2行目=銘柄コード、3行目=銘柄名
+  const codeRow = headRows[0], nameRow = headRows[1];
   const list = [];
   for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
     if (codeRow[col - 1]) list.push({ code: String(codeRow[col - 1]), name: String(nameRow[col - 1]) });
