@@ -74,6 +74,45 @@
     <script>
       let draggingEl = null;
 
+      // ==== ドラッグ中の自動スクロール ====
+      // ブラウザ標準の自動スクロールはリストの端のごく狭い範囲でしか反応しないため、自前で行う。
+      // リストの上端・下端から AUTO_SCROLL_ZONE px 以内にカーソルがあると、端に近いほど速くスクロールする。
+      // リストの外(上の説明文や下のボタンのあたり)まで出たときは最高速でスクロールする。
+      const AUTO_SCROLL_ZONE = 90;      // 反応する範囲(px)
+      const AUTO_SCROLL_MAX_SPEED = 18; // 1フレームあたりの最大スクロール量(px)
+      let dragPointerY = null;
+      let autoScrollFrame = null;
+
+      function autoScrollStep() {
+        const list = document.getElementById('sortList');
+        if (dragPointerY !== null) {
+          const rect = list.getBoundingClientRect();
+          let speed = 0; // -1(上へ最高速)〜1(下へ最高速)
+          if (dragPointerY < rect.top + AUTO_SCROLL_ZONE) {
+            speed = -Math.min(1, (rect.top + AUTO_SCROLL_ZONE - dragPointerY) / AUTO_SCROLL_ZONE);
+          } else if (dragPointerY > rect.bottom - AUTO_SCROLL_ZONE) {
+            speed = Math.min(1, (dragPointerY - (rect.bottom - AUTO_SCROLL_ZONE)) / AUTO_SCROLL_ZONE);
+          }
+          if (speed !== 0) list.scrollTop += Math.round(speed * AUTO_SCROLL_MAX_SPEED) || Math.sign(speed);
+        }
+        autoScrollFrame = requestAnimationFrame(autoScrollStep);
+      }
+
+      function startAutoScroll() {
+        if (autoScrollFrame === null) autoScrollFrame = requestAnimationFrame(autoScrollStep);
+      }
+
+      function stopAutoScroll() {
+        if (autoScrollFrame !== null) cancelAnimationFrame(autoScrollFrame);
+        autoScrollFrame = null;
+        dragPointerY = null;
+      }
+
+      // dragoverはカーソルの下の要素から伝わってくるので、リストの外にいるときの位置もここで拾える
+      document.addEventListener('dragover', function(e) {
+        if (draggingEl) dragPointerY = e.clientY;
+      });
+
       window.addEventListener('load', function() {
         google.script.run
           .withSuccessHandler(renderList)
@@ -96,11 +135,13 @@
           li.addEventListener('dragstart', function() {
             draggingEl = li;
             li.classList.add('dragging');
+            startAutoScroll();
           });
 
           li.addEventListener('dragend', function() {
             li.classList.remove('dragging');
             draggingEl = null;
+            stopAutoScroll();
             Array.from(list.children).forEach(function(el) {
               el.classList.remove('drag-over');
             });
