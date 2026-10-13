@@ -217,6 +217,24 @@ function fetchPdfBytes_(url) {
   return pdfBytesFromResponse_(UrlFetchApp.fetch(url, { muteHttpExceptions: true }));
 }
 
+/**
+ * PDFの応答からテキストを取り出す。自前のPDFパーサ(06_信用残のmtExtractPdfText_)で読み、
+ * isReadable(text)がfalseならDrive変換で読み直す(Drive変換は一時ファイルの作成・削除で数秒かかるため、通常は使わない)。
+ * PDFでない応答(404のページなど)はnull。
+ */
+function pdfResponseToText_(response, isReadable) {
+  const bytes = pdfBytesFromResponse_(response);
+  if (!bytes) return null;
+  try {
+    const text = mtExtractPdfText_(bytes);
+    if (isReadable(text)) return text;
+    Logger.log('PDFを自前の解析で読めなかったため、Drive変換で読み直します');
+  } catch (e) {
+    Logger.log('PDFの自前の解析に失敗したため、Drive変換で読み直します: ' + e);
+  }
+  return convertPdfBlobToText_(response.getBlob());
+}
+
 /** HTTPの応答がPDFならバイト列を返す(404のページなどPDFでなければnull) */
 function pdfBytesFromResponse_(response) {
   if (!response || response.getResponseCode() !== 200) return null;

@@ -61,23 +61,12 @@ function marketValuePdfRequest_(dateStr) {
   return { url: marketValuePdfUrl_(dateStr), muteHttpExceptions: true };
 }
 
-/**
- * 商況プリントPDFの応答からテキストを取り出す。
- * 自前のPDFパーサ(06_信用残のmtExtractPdfText_)で読み、売買代金・出来高が取れなければDrive変換で読み直す
- * (Drive変換は一時ファイルの作成・削除で数秒かかるため、通常は使わない)。
- */
+/** 商況プリントPDFの応答からテキストを取り出す(売買代金・出来高が自前の解析で取れなければDrive変換で読み直す) */
 function marketValuePdfText_(response) {
-  const bytes = pdfBytesFromResponse_(response);
-  if (!bytes) return null;
-  try {
-    const text = mtExtractPdfText_(bytes);
+  return pdfResponseToText_(response, text => {
     const volumes = parseMarketVolumesFromPdfText(text);
-    if (parseMarketTradingValuesFromPdfText(text) && volumes && MARKET_VALUE_ITEMS.every(item => volumes[item.code] !== null)) return text;
-    Logger.log('商況プリントPDFを自前の解析で読めなかったため、Drive変換で読み直します');
-  } catch (e) {
-    Logger.log('商況プリントPDFの自前の解析に失敗したため、Drive変換で読み直します: ' + e);
-  }
-  return convertPdfBlobToText_(response.getBlob());
+    return !!parseMarketTradingValuesFromPdfText(text) && !!volumes && MARKET_VALUE_ITEMS.every(item => volumes[item.code] !== null);
+  });
 }
 
 function findMarketValuePdfUrlFromIndex_(dateStr) {

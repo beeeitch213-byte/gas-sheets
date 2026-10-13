@@ -145,12 +145,68 @@ function parseJpxPdfTextOld_(fullText) {
 // 単純な表なので、Excel(Googleスプレッドシートに変換)をセル単位で読み取ることで曖昧さなく値を取得する。
 // (PDF版のURLの拡張子を.xlsxに置き換えるだけで同じフォルダにExcel版が存在することを確認済み)
 
-/** xlsxのURLをGoogleスプレッドシートに変換して開く(使い終わったらGoogleスプレッドシート側はtrashする) */
-function convertXlsxUrlToSheet_(xlsxUrl) {
-  const blob = UrlFetchApp.fetch(xlsxUrl, { muteHttpExceptions: true }).getBlob();
+/**
+ * xlsxの1枚目のシート(xl/worksheets/sheet1.xml)から、指定した行の値を{行番号: [A列, B列, ...]}で返す
+ * (数値セルは数値、それ以外は'')。Googleスプレッドシートへの変換(一時ファイルの作成・削除で数秒かかる)を
+ * 避けるため、xlsx(zip)を展開してXMLを直接読む。読めなければnull。
+ */
+function readXlsxRows_(blob, rowNumbers, lastCol) {
+  const sheetFile = Utilities.unzip(blob.setContentType('application/zip'))
+    .find(f => f.getName() === 'xl/worksheets/sheet1.xml');
+  if (!sheetFile) return null;
+  const xml = sheetFile.getDataAsString('UTF-8');
+  const colIndex = letters => letters.split('').reduce((n, ch) => n * 26 + ch.charCodeAt(0) - 64, 0);
+
+  const rows = {};
+  const rowRe = /<row\b[^>]*\br="(\d+)"[^>]*>([\s\S]*?)<\/row>/g;
+  let rm;
+  while ((rm = rowRe.exec(xml)) !== null) {
+    const rowNumber = parseInt(rm[1], 10);
+    if (rowNumbers.indexOf(rowNumber) === -1) continue;
+    const values = new Array(lastCol).fill('');
+    const cellRe = /<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g;
+    let cm;
+    while ((cm = cellRe.exec(rm[2])) !== null) {
+      const ref = cm[1].match(/\br="([A-Z]+)\d+"/);
+      const type = cm[1].match(/\bt="([^"]*)"/);
+      const v = cm[2] && cm[2].match(/<v>([^<]*)<\/v>/);
+      if (!ref || !v || (type && type[1] !== 'n')) continue;
+      const col = colIndex(ref[1]);
+      if (col <= lastCol && v[1] !== '' && !isNaN(Number(v[1]))) values[col - 1] = Number(v[1]);
+    }
+    rows[rowNumber] = values;
+  }
+  return rows;
+}
+
+/** xlsxをGoogleスプレッドシートに変換して指定した行を読む(readXlsxRows_で読めなかった場合の保険。変換したファイルはtrashする) */
+function readXlsxRowsViaDrive_(blob, rowNumbers, lastCol) {
   const resource = { name: 'temp_jpx_xlsx_convert', mimeType: MimeType.GOOGLE_SHEETS };
   const file = Drive.Files.create(resource, blob, { convert: true });
-  return { ss: SpreadsheetApp.openById(file.id), fileId: file.id };
+  try {
+    const sheet = SpreadsheetApp.openById(file.id).getSheets()[0];
+    const rows = {};
+    rowNumbers.forEach(r => { rows[r] = sheet.getRange(r, 1, 1, lastCol).getValues()[0]; });
+    return rows;
+  } finally {
+    DriveApp.getFileById(file.id).setTrashed(true);
+  }
+}
+
+/** 新形式のxlsxを取得して、各市場の「金額 Value」行を{行番号: 値の配列}で返す */
+function fetchJpxXlsxValueRows_(xlsxUrl) {
+  const blob = UrlFetchApp.fetch(xlsxUrl, { muteHttpExceptions: true }).getBlob();
+  const rowNumbers = JPX_MARKETS.map(m => JPX_XLSX_VALUE_ROW_[m.key]);
+  const isReadable = rows => !!rows && rowNumbers.every(r => rows[r] && rows[r].some(v => typeof v === 'number'));
+  let rows = null;
+  try {
+    rows = readXlsxRows_(blob.copyBlob(), rowNumbers, JPX_XLSX_LAST_COL_);
+  } catch (e) {
+    Logger.log('xlsxの直接読み取りに失敗: ' + e);
+  }
+  if (isReadable(rows)) return rows;
+  Logger.log('xlsxを直接読めなかったため、Googleスプレッドシートに変換して読み直します: ' + xlsxUrl);
+  return readXlsxRowsViaDrive_(blob, rowNumbers, JPX_XLSX_LAST_COL_);
 }
 
 // 列位置(1始まり)。シート構成はJPXの固定テンプレートで、サンプル3週分すべてで同一だったため固定値で扱う。
@@ -212,12 +268,11 @@ function computeJpxRatios_(cats) {
   });
 }
 
-function parseJpxXlsxSheet_(ss) {
-  const sheet = ss.getSheets()[0];
+/** valueRowsはfetchJpxXlsxValueRows_の戻り値({行番号: 値の配列}) */
+function parseJpxXlsxRows_(valueRows) {
   const result = {};
   JPX_MARKETS.forEach(market => {
-    const row = JPX_XLSX_VALUE_ROW_[market.key];
-    const rowValues = sheet.getRange(row, 1, 1, JPX_XLSX_LAST_COL_).getValues()[0];
+    const rowValues = valueRows[JPX_XLSX_VALUE_ROW_[market.key]];
     const cats = {};
     Object.keys(JPX_XLSX_CATEGORY_COLS_).forEach(catKey => {
       const sums = [0, 0, 0, 0]; // 売,買,差引,合計
@@ -610,14 +665,7 @@ function sortJpxStatsSheetByDate() {
 
 /** weekInfoを取得・解析する(新形式はExcel、旧形式はPDFを使う) */
 function fetchAndParseJpxWeek_(weekInfo) {
-  if (weekInfo.isNewFormat) {
-    const converted = convertXlsxUrlToSheet_(weekInfo.xlsxUrl);
-    try {
-      return parseJpxXlsxSheet_(converted.ss);
-    } finally {
-      DriveApp.getFileById(converted.fileId).setTrashed(true);
-    }
-  }
+  if (weekInfo.isNewFormat) return parseJpxXlsxRows_(fetchJpxXlsxValueRows_(weekInfo.xlsxUrl));
   const text = convertPdfUrlToText(weekInfo.pdfUrl);
   return parseJpxPdfTextOld_(text);
 }
