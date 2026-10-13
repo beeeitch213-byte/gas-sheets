@@ -340,7 +340,10 @@ function updateDailyClose() {
   const closes = fetchClosesBulk(normalCodes, startMs);
   // 前日比はYahoo APIのchartPreviousCloseではなく、DBに記録済みの前営業日の実終値から計算する
   // (chartPreviousCloseは銘柄によって実際の前営業日と一致しないことがあるため)
-  const prevCloseMap = getPreviousCloseMap(getOrCreateDatabaseSheet(), todayStr);
+  // DBの見出し行・日付列は1回だけ読み、DB書き込み(writeClosesToDatabaseForDate)でも使い回す
+  const dbSheet = getOrCreateDatabaseSheet();
+  const dbIndex = readDatabaseIndex_(dbSheet);
+  const prevCloseMap = getPreviousCloseMap(dbSheet, todayStr, dbIndex);
 
   const failedCodes = [];
 
@@ -366,7 +369,7 @@ function updateDailyClose() {
   sheet.getRange(targetRow, 1, 1, lastCol).setValues([rowValues]);
 
   try {
-    writeClosesToDatabaseForDate(today, priceMap);
+    writeClosesToDatabaseForDate(today, priceMap, dbIndex);
   } catch (e) {
     Logger.log('データベースへの一括書き込みに失敗しました: ' + e);
   }
@@ -503,7 +506,10 @@ function updateCloseForSpecificDate(targetDate) {
   const fetchStart = new Date(targetDate); fetchStart.setDate(fetchStart.getDate() - 3);
   const fetchEnd = new Date(targetDate); fetchEnd.setDate(fetchEnd.getDate() + 1);
   const charts = fetchHistoricalChartsBulk(normalCodes, fetchStart, fetchEnd, startMs);
-  const prevCloseMap = getPreviousCloseMap(getOrCreateDatabaseSheet(), targetDateStr);
+  // DBの見出し行・日付列は1回だけ読み、DB書き込み(writeClosesToDatabaseForDate)でも使い回す
+  const dbSheet = getOrCreateDatabaseSheet();
+  const dbIndex = readDatabaseIndex_(dbSheet);
+  const prevCloseMap = getPreviousCloseMap(dbSheet, targetDateStr, dbIndex);
 
   const failedCodes = [];
 
@@ -529,7 +535,7 @@ function updateCloseForSpecificDate(targetDate) {
   });
 
   sheet.getRange(targetRow, 1, 1, lastCol).setValues([rowValues]);
-  try { writeClosesToDatabaseForDate(targetDate, priceMap); } catch (e) { Logger.log(targetDateStr + ': データベース書き込みに失敗: ' + e); }
+  try { writeClosesToDatabaseForDate(targetDate, priceMap, dbIndex); } catch (e) { Logger.log(targetDateStr + ': データベース書き込みに失敗: ' + e); }
 
   const totalItems = stockCols.length + MARKET_VALUE_ITEMS.length;
   let message = targetDateStr + ': ' + Object.keys(priceMap).length + '/' + totalItems + '項目を更新しました';
@@ -596,38 +602,61 @@ function createNextMonthSheetIfNeeded(currentYear, currentMonth, startMs) {
   const dayLabels = newSheet.getRange(CLOSE_FIRST_ROW, 1, daysInMonth, 1).getValues();
   if (dayLabels[daysInMonth - 1][0] !== '') return; // 最終日まで入力済み=作成完了済み
 
+  if (startMs && (Date.now() - startMs) > RUN_TIME_LIMIT_MS) {
+    Logger.log(newSheetName + ' シートの作成は時間切れのためできませんでした。翌日以降の更新で続きが作成されます。');
+    return;
+  }
+
   const lastCol = newSheet.getLastColumn();
   const codeRow = newSheet.getRange(2, 1, 1, lastCol).getValues()[0];
   const maxRows = newSheet.getMaxRows();
-  // 休場マークを入れる列ブロック(市場ブロック+登録済み銘柄)
-  const holidayBlocks = MARKET_VALUE_ITEMS.map(item => ({ col: item.col, width: MARKET_VALUE_COL_WIDTH }));
+  // 休場マークを入れる列範囲(市場ブロック+登録済み銘柄)。隣り合うブロックは1つの範囲にまとめる
+  const colSpans = [];
+  const addColSpan = (col, width) => {
+    const last = colSpans[colSpans.length - 1];
+    if (last && last.col + last.width === col) last.width += width;
+    else colSpans.push({ col: col, width: width });
+  };
+  MARKET_VALUE_ITEMS.forEach(item => addColSpan(item.col, MARKET_VALUE_COL_WIDTH));
   for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
-    if (codeRow[col - 1]) holidayBlocks.push({ col: col, width: STOCK_COL_WIDTH });
+    if (codeRow[col - 1]) addColSpan(col, STOCK_COL_WIDTH);
   }
 
+  // A列(日付)・B列(曜日)は全日分をまとめて書く(処理済みの日も同じ値になるだけ)。
+  // 休場マークは未処理の日だけに入れ、連続する休場日(土日など)は1つの行範囲にまとめる。
+  const dayLabelCol = [], weekdayCol = [], holidayRuns = [];
   for (let d = 1; d <= daysInMonth; d++) {
-    if (dayLabels[d - 1][0] !== '') continue; // 前回までに処理済みの日はスキップ(再開時)
-    if (startMs && (Date.now() - startMs) > RUN_TIME_LIMIT_MS) {
-      Logger.log(newSheetName + ' シートの作成が途中(' + (d - 1) + '/' + daysInMonth + '日)で時間切れになりました。翌日以降の更新で続きが作成されます。');
-      return;
-    }
-
     const date = new Date(nextYear, nextMonth - 1, d);
     const dow = date.getDay();
-    const isHoliday = (dow === 0 || dow === 6) || isJapaneseHoliday(date);
-
-    // 終値の日次行(6行目〜)と信用残の日次行(39行目〜)の両方に日付・曜日・休場マークを入れる。
-    // 終値側のA列(完成判定に使う)は最後に書くので、途中で止まっても次回この日からやり直せる。
-    [MARGIN_FIRST_ROW + (d - 1), CLOSE_FIRST_ROW + (d - 1)].forEach(row => {
-      if (row > maxRows) return;
-      newSheet.getRange(row, 2).setValue(MARGIN_WEEKDAY_NAMES_[dow]);
-      if (isHoliday) {
-        // 休場日は全ブロックをまとめて1回で「休」+グレーにする
-        const a1List = holidayBlocks.map(b => columnToLetter(b.col) + row + ':' + columnToLetter(b.col + b.width - 1) + row);
-        newSheet.getRangeList(a1List).setValue(HOLIDAY_LABEL).setBackground(HOLIDAY_COLOR);
-      }
-      newSheet.getRange(row, 1).setValue(d + '日');
-    });
+    dayLabelCol.push([d + '日']);
+    weekdayCol.push([MARGIN_WEEKDAY_NAMES_[dow]]);
+    if (dayLabels[d - 1][0] !== '') continue; // 前回までに処理済みの日(再開時)
+    if ((dow === 0 || dow === 6) || isJapaneseHoliday(date)) {
+      const last = holidayRuns[holidayRuns.length - 1];
+      if (last && last.end === d - 1) last.end = d;
+      else holidayRuns.push({ start: d, end: d });
+    }
   }
+
+  // 終値の日次行(6行目〜)と信用残の日次行(39行目〜)の両方に入れる。
+  // 終値側のA列(完成判定に使う)は最後に書くので、途中で止まっても次回やり直せる。
+  const blocks = [MARGIN_FIRST_ROW, CLOSE_FIRST_ROW]
+    .map(firstRow => ({ firstRow: firstRow, rows: Math.min(daysInMonth, maxRows - firstRow + 1) }))
+    .filter(b => b.rows > 0);
+
+  blocks.forEach(b => newSheet.getRange(b.firstRow, 2, b.rows, 1).setValues(weekdayCol.slice(0, b.rows)));
+
+  const a1List = [];
+  blocks.forEach(b => {
+    holidayRuns.forEach(run => {
+      if (run.start > b.rows) return;
+      const top = b.firstRow + run.start - 1;
+      const bottom = b.firstRow + Math.min(run.end, b.rows) - 1;
+      colSpans.forEach(s => a1List.push(columnToLetter(s.col) + top + ':' + columnToLetter(s.col + s.width - 1) + bottom));
+    });
+  });
+  if (a1List.length > 0) newSheet.getRangeList(a1List).setValue(HOLIDAY_LABEL).setBackground(HOLIDAY_COLOR);
+
+  blocks.forEach(b => newSheet.getRange(b.firstRow, 1, b.rows, 1).setValues(dayLabelCol.slice(0, b.rows)));
   Logger.log(newSheetName + ' シートの作成が完了しました');
 }

@@ -25,46 +25,56 @@ function getOrCreateDatabaseColumn(dbSheet, code) {
 }
 
 /**
+ * DBシートの見出し行と日付列を1回で読み込む(1回の更新の中で、前日比の計算とDB書き込みに使い回す)。
+ * dateKeys[i] は (i+2)行目の日付を'yyyy-MM-dd'にしたもの(日付でない行はnull)。
+ */
+function readDatabaseIndex_(dbSheet) {
+  const lastRow = dbSheet.getLastRow();
+  const lastCol = Math.max(dbSheet.getLastColumn(), 1);
+  const headerRow = dbSheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  const dateKeys = lastRow >= 2
+    ? dbSheet.getRange(2, 1, lastRow - 1, 1).getValues().map(r => (r[0] instanceof Date ? Utilities.formatDate(r[0], 'Asia/Tokyo', 'yyyy-MM-dd') : null))
+    : [];
+  return { lastRow: lastRow, lastCol: lastCol, headerRow: headerRow, dateKeys: dateKeys };
+}
+
+/**
  * DBシートの中から、beforeDateStr(例 '2026-10-01')より前で最も新しい日付の行を探し、
  * {コード: 終値} のマップを返す(前日比の計算に使う「前営業日の実終値」)。
  * 再実行などで当日分が既にDBに書き込まれていた場合は、その行を飛ばして1つ前の行を使う。
+ * dbIndexはreadDatabaseIndex_の結果(省略時はその場で読み込む)。
  */
-function getPreviousCloseMap(dbSheet, beforeDateStr) {
-  const lastRow = dbSheet.getLastRow();
-  if (lastRow < 2) return {};
-  const lastCol = Math.max(dbSheet.getLastColumn(), 1);
-  const headerRow = dbSheet.getRange(1, 1, 1, lastCol).getValues()[0];
+function getPreviousCloseMap(dbSheet, beforeDateStr, dbIndex) {
+  const idx = dbIndex || readDatabaseIndex_(dbSheet);
+  if (idx.lastRow < 2) return {};
 
-  // 日付列を1回で読み、対象日より前で一番新しい日付の行を探す
+  // 対象日より前で一番新しい日付の行を探す
   // (過去日付を後から追加するとDBの並びが日付順でなくなることがあるため、行の位置ではなく日付で判定する)
-  const dates = dbSheet.getRange(2, 1, lastRow - 1, 1).getValues();
   let bestRow = -1, bestKey = '';
-  for (let i = 0; i < dates.length; i++) {
-    const d = dates[i][0];
-    if (!(d instanceof Date)) continue;
-    const key = Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy-MM-dd');
-    if (key < beforeDateStr && key > bestKey) { bestKey = key; bestRow = i + 2; }
-  }
+  idx.dateKeys.forEach((key, i) => {
+    if (key && key < beforeDateStr && key > bestKey) { bestKey = key; bestRow = i + 2; }
+  });
   if (bestRow === -1) return {};
-  const rowVals = dbSheet.getRange(bestRow, 1, 1, lastCol).getValues()[0];
+  const rowVals = dbSheet.getRange(bestRow, 1, 1, idx.lastCol).getValues()[0];
   const map = {};
-  for (let c = 2; c <= lastCol; c++) {
-    if (headerRow[c - 1] && typeof rowVals[c - 1] === 'number') map[String(headerRow[c - 1])] = rowVals[c - 1];
+  for (let c = 2; c <= idx.lastCol; c++) {
+    if (idx.headerRow[c - 1] && typeof rowVals[c - 1] === 'number') map[String(idx.headerRow[c - 1])] = rowVals[c - 1];
   }
   return map;
 }
 
-function writeClosesToDatabaseForDate(date, priceMap) {
+/** dbIndexはreadDatabaseIndex_の結果(省略時はその場で読み込む)。読み込み後にDBの行・列が増えていないこと */
+function writeClosesToDatabaseForDate(date, priceMap, dbIndex) {
   const codes = Object.keys(priceMap);
   if (codes.length === 0) return;
 
   const dbSheet = getOrCreateDatabaseSheet();
+  const idx = dbIndex || readDatabaseIndex_(dbSheet);
   const dateStr = Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy-MM-dd');
 
-  let lastCol = Math.max(dbSheet.getLastColumn(), 1);
-  const headerRow = dbSheet.getRange(1, 1, 1, lastCol).getValues()[0];
+  let lastCol = idx.lastCol;
   const colMap = {};
-  headerRow.forEach((h, i) => { if (h) colMap[String(h)] = i + 1; });
+  idx.headerRow.forEach((h, i) => { if (h) colMap[String(h)] = i + 1; });
 
   const newCodes = codes.filter(c => !colMap[c]);
   if (newCodes.length > 0) {
@@ -73,20 +83,17 @@ function writeClosesToDatabaseForDate(date, priceMap) {
     lastCol += newCodes.length;
   }
 
-  const lastRow = dbSheet.getLastRow();
-  const dateColumn = lastRow >= 2 ? dbSheet.getRange(2, 1, lastRow - 1, 1).getValues() : [];
-  let targetRow = -1;
-  for (let i = 0; i < dateColumn.length; i++) {
-    if (dateColumn[i][0] instanceof Date && Utilities.formatDate(dateColumn[i][0], 'Asia/Tokyo', 'yyyy-MM-dd') === dateStr) {
-      targetRow = 2 + i; break;
-    }
+  const found = idx.dateKeys.indexOf(dateStr);
+  let targetRow, rowValues;
+  if (found !== -1) {
+    targetRow = 2 + found;
+    rowValues = dbSheet.getRange(targetRow, 1, 1, lastCol).getValues()[0];
+  } else {
+    // 新しい日付の行は空なので、読み込まずに日付だけ入れた行を作る
+    targetRow = Math.max(idx.lastRow, 1) + 1;
+    rowValues = new Array(lastCol).fill('');
+    rowValues[0] = date;
   }
-  if (targetRow === -1) {
-    targetRow = lastRow + 1;
-    dbSheet.getRange(targetRow, 1).setValue(date);
-  }
-
-  const rowValues = dbSheet.getRange(targetRow, 1, 1, lastCol).getValues()[0];
   codes.forEach(code => { rowValues[colMap[code] - 1] = priceMap[code]; });
   dbSheet.getRange(targetRow, 1, 1, lastCol).setValues([rowValues]);
 }
