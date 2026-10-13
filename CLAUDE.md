@@ -54,6 +54,10 @@ Apps Script エディタ上でこの番号順に並べる(`00` が先頭でな�
 
 ## デプロイ
 
+main ブランチに `stock-sheet/main/` か `pl-sheet/` の変更が入ると、GitHub Actions(`.github/workflows/clasp-push.yml`)が両プロジェクトを自動で `clasp push` する。認証情報はリポジトリの Actions Secrets `CLASPRC_JSON`。Apps Script 側はリポジトリの内容で丸ごと上書きされるので、エディタで直接編集しない。
+
+手動で反映する場合:
+
 ```sh
 cd stock-sheet/main && clasp push   # pl-sheet も同様
 ```

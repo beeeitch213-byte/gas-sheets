@@ -1,0 +1,47 @@
+# main ブランチに入ったコードを Apps Script に自動反映する(clasp push)。
+# 事前準備: リポジトリの Settings → Secrets and variables → Actions に
+#   CLASPRC_JSON(手元で clasp login したときの ~/.clasprc.json の中身)を登録しておく。
+# stock-sheet/db は統合前の旧版なので対象外。
+name: Apps Script へ反映 (clasp push)
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'stock-sheet/main/**'
+      - 'pl-sheet/**'
+  workflow_dispatch: # Actions タブから手動でも実行できる
+
+concurrency:
+  group: clasp-push
+  cancel-in-progress: false
+
+jobs:
+  push:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        project: [stock-sheet/main, pl-sheet]
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: clasp の認証情報を書き出す
+        env:
+          CLASPRC_JSON: ${{ secrets.CLASPRC_JSON }}
+        run: |
+          if [ -z "$CLASPRC_JSON" ]; then
+            echo "::error::Secrets に CLASPRC_JSON が登録されていません"
+            exit 1
+          fi
+          printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
+          chmod 600 ~/.clasprc.json
+
+      - name: clasp push (${{ matrix.project }})
+        working-directory: ${{ matrix.project }}
+        run: npx --yes @google/clasp@3 push --force
