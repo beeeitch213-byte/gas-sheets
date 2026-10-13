@@ -56,6 +56,30 @@ function marketValuePdfUrl_(dateStr) {
   return 'https://www.jpx.co.jp/markets/equities/volume-and-value/tvdivq000000derc-att/2_' + ymd + '.pdf';
 }
 
+/** 商況プリント２(後場)PDFのUrlFetchApp.fetchAll用リクエスト(終値の並列取得に相乗りさせる用) */
+function marketValuePdfRequest_(dateStr) {
+  return { url: marketValuePdfUrl_(dateStr), muteHttpExceptions: true };
+}
+
+/**
+ * 商況プリントPDFの応答からテキストを取り出す。
+ * 自前のPDFパーサ(06_信用残のmtExtractPdfText_)で読み、売買代金・出来高が取れなければDrive変換で読み直す
+ * (Drive変換は一時ファイルの作成・削除で数秒かかるため、通常は使わない)。
+ */
+function marketValuePdfText_(response) {
+  const bytes = pdfBytesFromResponse_(response);
+  if (!bytes) return null;
+  try {
+    const text = mtExtractPdfText_(bytes);
+    const volumes = parseMarketVolumesFromPdfText(text);
+    if (parseMarketTradingValuesFromPdfText(text) && volumes && MARKET_VALUE_ITEMS.every(item => volumes[item.code] !== null)) return text;
+    Logger.log('商況プリントPDFを自前の解析で読めなかったため、Drive変換で読み直します');
+  } catch (e) {
+    Logger.log('商況プリントPDFの自前の解析に失敗したため、Drive変換で読み直します: ' + e);
+  }
+  return convertPdfBlobToText_(response.getBlob());
+}
+
 function findMarketValuePdfUrlFromIndex_(dateStr) {
   const ymd = dateStr.replace(/-/g, '');
   const response = UrlFetchApp.fetch('https://www.jpx.co.jp/markets/equities/volume-and-value/index.html', { muteHttpExceptions: true });
@@ -72,12 +96,13 @@ function findMarketValuePdfUrlFromIndex_(dateStr) {
  * {コード: {value, volume}} で返す。
  * 休場日・未公開日はnullを返す(呼び出し側でスキップ・失敗扱いにする)。
  */
-function fetchMarketTradingValuesForDate(dateStr) {
+function fetchMarketTradingValuesForDate(dateStr, prefetchedResponse) {
   try {
-    let text = fetchPdfTextFromUrl_(marketValuePdfUrl_(dateStr));
+    // prefetchedResponse: 終値の並列取得に相乗りして取得済みのPDFの応答(無ければここで取得する)
+    let text = marketValuePdfText_(prefetchedResponse || UrlFetchApp.fetch(marketValuePdfUrl_(dateStr), { muteHttpExceptions: true }));
     if (!text) {
       const fallbackUrl = findMarketValuePdfUrlFromIndex_(dateStr);
-      if (fallbackUrl) text = fetchPdfTextFromUrl_(fallbackUrl);
+      if (fallbackUrl) text = marketValuePdfText_(UrlFetchApp.fetch(fallbackUrl, { muteHttpExceptions: true }));
     }
     if (!text) return null;
     const millionYenValues = parseMarketTradingValuesFromPdfText(text);
@@ -152,26 +177,41 @@ function fetchClose(code) {
 }
 
 /**
+ * リクエストを10件ずつUrlFetchApp.fetchAllで並列取得し、応答の配列(失敗した分はnull)を返す。
+ * extraに{request}を渡すと最初のバッチに相乗りさせ、その応答をextra.responseに入れる(待ち時間を重ねて短くするため)。
+ */
+function fetchAllInBatches_(requests, extra) {
+  const BATCH = 10;
+  const responses = [];
+  for (let i = 0; i === 0 || i < requests.length; i += BATCH) {
+    const batch = requests.slice(i, i + BATCH);
+    const withExtra = (i === 0 && extra) ? batch.concat([extra.request]) : batch;
+    let res = [];
+    if (withExtra.length > 0) {
+      try { res = UrlFetchApp.fetchAll(withExtra); } catch (e) { res = []; }
+    }
+    batch.forEach((_, k) => responses.push(res[k] || null));
+    if (i === 0 && extra) extra.response = res[batch.length] || null;
+    if (i + BATCH < requests.length) Utilities.sleep(300);
+  }
+  return responses;
+}
+
+/**
  * 複数銘柄の終値をまとめて並列取得する({コード: 結果 or null} を返す)。
  * 並列で失敗した銘柄だけ、時間に余裕があれば従来の逐次取得(リトライ付き)でやり直す。
+ * extraはfetchAllInBatches_を参照(省略可)。
  */
-function fetchClosesBulk(codes, startMs) {
+function fetchClosesBulk(codes, startMs, extra) {
   const results = {};
-  const BATCH = 10;
-  for (let i = 0; i < codes.length; i += BATCH) {
-    const batch = codes.slice(i, i + BATCH);
-    const requests = batch.map(code => ({
-      url: 'https://query1.finance.yahoo.com/v8/finance/chart/' + code + '.T?range=5d&events=split',
-      method: 'get', muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' }
-    }));
-    let responses = [];
-    try { responses = UrlFetchApp.fetchAll(requests); } catch (e) { responses = []; }
-    batch.forEach((code, k) => {
-      const r = responses[k];
-      results[code] = (r && r.getResponseCode() === 200) ? parseChartClose(r.getContentText()) : null;
-    });
-    if (i + BATCH < codes.length) Utilities.sleep(300);
-  }
+  const responses = fetchAllInBatches_(codes.map(code => ({
+    url: 'https://query1.finance.yahoo.com/v8/finance/chart/' + code + '.T?range=5d&events=split',
+    method: 'get', muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' }
+  })), extra);
+  codes.forEach((code, k) => {
+    const r = responses[k];
+    results[code] = (r && r.getResponseCode() === 200) ? parseChartClose(r.getContentText()) : null;
+  });
   codes.forEach(code => {
     if (!results[code] && (Date.now() - startMs) < RUN_TIME_LIMIT_MS) results[code] = fetchClose(code);
   });
@@ -337,7 +377,9 @@ function updateDailyClose() {
     if (code) stockCols.push({ col: col, code: String(code) });
   }
   const normalCodes = stockCols.map(s => s.code);
-  const closes = fetchClosesBulk(normalCodes, startMs);
+  // 商況プリント２(後場)のPDFも終値の最初の並列取得に相乗りさせ、待ち時間を短くする
+  const marketPdf = { request: marketValuePdfRequest_(todayStr) };
+  const closes = fetchClosesBulk(normalCodes, startMs, marketPdf);
   // 前日比はYahoo APIのchartPreviousCloseではなく、DBに記録済みの前営業日の実終値から計算する
   // (chartPreviousCloseは銘柄によって実際の前営業日と一致しないことがあるため)
   // DBの見出し行・日付列は1回だけ読み、DB書き込み(writeClosesToDatabaseForDate)でも使い回す
@@ -348,7 +390,7 @@ function updateDailyClose() {
   const failedCodes = [];
 
   // プライム/スタンダード/グロースの売買代金(商況プリント２(後場)PDFより)
-  const marketValues = fetchMarketTradingValuesForDate(todayStr);
+  const marketValues = fetchMarketTradingValuesForDate(todayStr, marketPdf.response);
   writeMarketValuesToRow_(rowValues, marketValues, prevCloseMap, priceMap, failedCodes);
 
   stockCols.forEach(s => {
@@ -442,24 +484,17 @@ function parseHistoricalChart(text) {
   }
 }
 
-/** 複数銘柄の日次チャートを並列取得する({コード: {dateMap, splits} or null}) */
-function fetchHistoricalChartsBulk(codes, startDate, endDate, startMs) {
+/** 複数銘柄の日次チャートを並列取得する({コード: {dateMap, splits} or null})。extraはfetchAllInBatches_を参照(省略可) */
+function fetchHistoricalChartsBulk(codes, startDate, endDate, startMs, extra) {
   const results = {};
-  const BATCH = 10;
-  for (let i = 0; i < codes.length; i += BATCH) {
-    const batch = codes.slice(i, i + BATCH);
-    const requests = batch.map(code => ({
-      url: fetchHistoricalChart(code, startDate, endDate),
-      method: 'get', muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' }
-    }));
-    let responses = [];
-    try { responses = UrlFetchApp.fetchAll(requests); } catch (e) { responses = []; }
-    batch.forEach((code, k) => {
-      const r = responses[k];
-      results[code] = (r && r.getResponseCode() === 200) ? parseHistoricalChart(r.getContentText()) : null;
-    });
-    if (i + BATCH < codes.length) Utilities.sleep(300);
-  }
+  const responses = fetchAllInBatches_(codes.map(code => ({
+    url: fetchHistoricalChart(code, startDate, endDate),
+    method: 'get', muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' }
+  })), extra);
+  codes.forEach((code, k) => {
+    const r = responses[k];
+    results[code] = (r && r.getResponseCode() === 200) ? parseHistoricalChart(r.getContentText()) : null;
+  });
   codes.forEach(code => {
     if (!results[code] && startMs && (Date.now() - startMs) < RUN_TIME_LIMIT_MS) {
       try {
@@ -505,7 +540,9 @@ function updateCloseForSpecificDate(targetDate) {
   // 前後2日の余裕を持たせて取得し、ちょうどtargetDateStrのデータを使う(休場日や祝日のズレ対策)
   const fetchStart = new Date(targetDate); fetchStart.setDate(fetchStart.getDate() - 3);
   const fetchEnd = new Date(targetDate); fetchEnd.setDate(fetchEnd.getDate() + 1);
-  const charts = fetchHistoricalChartsBulk(normalCodes, fetchStart, fetchEnd, startMs);
+  // 商況プリント２(後場)のPDFも日次チャートの最初の並列取得に相乗りさせ、待ち時間を短くする
+  const marketPdf = { request: marketValuePdfRequest_(targetDateStr) };
+  const charts = fetchHistoricalChartsBulk(normalCodes, fetchStart, fetchEnd, startMs, marketPdf);
   // DBの見出し行・日付列は1回だけ読み、DB書き込み(writeClosesToDatabaseForDate)でも使い回す
   const dbSheet = getOrCreateDatabaseSheet();
   const dbIndex = readDatabaseIndex_(dbSheet);
@@ -513,7 +550,7 @@ function updateCloseForSpecificDate(targetDate) {
 
   const failedCodes = [];
 
-  const marketValues = fetchMarketTradingValuesForDate(targetDateStr);
+  const marketValues = fetchMarketTradingValuesForDate(targetDateStr, marketPdf.response);
   writeMarketValuesToRow_(rowValues, marketValues, prevCloseMap, priceMap, failedCodes);
 
   stockCols.forEach(s => {

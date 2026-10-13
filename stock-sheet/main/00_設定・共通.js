@@ -214,8 +214,12 @@ function fetchPdfTextFromUrl_(url) {
 }
 
 function fetchPdfBytes_(url) {
-  const response = UrlFetchApp.fetch(url, { muteHttpExceptions: true });
-  if (response.getResponseCode() !== 200) return null;
+  return pdfBytesFromResponse_(UrlFetchApp.fetch(url, { muteHttpExceptions: true }));
+}
+
+/** HTTPの応答がPDFならバイト列を返す(404のページなどPDFでなければnull) */
+function pdfBytesFromResponse_(response) {
+  if (!response || response.getResponseCode() !== 200) return null;
   const bytes = new Uint8Array(response.getContent()); // Javaのbyte(-128〜127)は0〜255に変換される
   if (bytes.length < 5 || String.fromCharCode(bytes[0], bytes[1], bytes[2], bytes[3]) !== '%PDF') return null;
   return bytes;
