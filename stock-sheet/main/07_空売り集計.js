@@ -376,13 +376,15 @@ function buildShortSellChartSeries(col) {
   const dataRowCount = lastRow - 6;
   if (dataRowCount < 4) return { title: block.label, points: [] };
 
-  const allValues = sheet.getRange(7, 1, dataRowCount, sheet.getLastColumn()).getValues();
-  const amountIdx = block.col - 1; // 「売買代金」列の0始まりインデックス
-  const ratioIdx = block.col;      // 「比率」列(amountIdx+1)の0始まりインデックス
+  // 使うのはA列(日付)と、このブロックの売買代金・比率の2列だけなので、その分だけ読む(シート全体は70列近くある)
+  const dateValues = sheet.getRange(7, 1, dataRowCount, 1).getValues();
+  const allValues = sheet.getRange(7, block.col, dataRowCount, 2).getValues();
+  const amountIdx = 0; // 「売買代金」列
+  const ratioIdx = 1;  // 「比率」列
 
   const points = [];
   for (let r = 0; r + 3 < allValues.length; r += 4) {
-    const dateVal = allValues[r][0]; // A列(日付、4行結合の先頭行に文字列で入っている)
+    const dateVal = dateValues[r][0]; // A列(日付、4行結合の先頭行に文字列で入っている)
     const dateStr = (typeof dateVal === 'string' && dateVal) ? dateVal
       : (dateVal instanceof Date ? Utilities.formatDate(dateVal, 'Asia/Tokyo', 'yyyy-MM-dd') : null);
     if (!dateStr) continue;

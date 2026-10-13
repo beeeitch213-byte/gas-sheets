@@ -17,18 +17,51 @@
     }
     #bands_chart { width: 100%; height: calc(100vh - 90px); min-height: 480px; }
     #bands_note { padding: 8px 14px; color: #888; font-size: 12px; }
+    #loading { padding: 40px 14px; color: #888; font-size: 14px; text-align: center; }
   </style>
   <script>
+    // Google Chartsの読み込みとデータの取得(google.script.run)を同時に進め、両方そろったら描画する
     google.charts.load("current", {packages: ["corechart"]});
 
-    const initialBundle = <?!= bundleJson; ?>;
     const seriesKind = "<?!= seriesKind; ?>";
     const seriesId = "<?!= seriesId; ?>";
     const initialPeriodDays = <?!= initialPeriodDays; ?>;
 
+    let chartsReady = false;
+    let pendingBundle = null;
+
     google.charts.setOnLoadCallback(function () {
-      render(initialBundle);
+      chartsReady = true;
+      if (pendingBundle) {
+        render(pendingBundle);
+        pendingBundle = null;
+      }
     });
+
+    /** データが届いたら描画する(Google Chartsの読み込みがまだなら、読み込み完了時に描画する) */
+    function showBundle(bundle) {
+      if (chartsReady) render(bundle);
+      else pendingBundle = bundle;
+    }
+
+    /** 指定期間のデータをサーバーから取得して表示する(初回表示と参照期間の切り替えの両方で使う) */
+    function loadPeriod(days) {
+      const statusEl = document.getElementById('status');
+      statusEl.textContent = '読み込み中…';
+      google.script.run
+        .withSuccessHandler(function (bundle) {
+          statusEl.textContent = '';
+          showBundle(bundle);
+        })
+        .withFailureHandler(function (err) {
+          statusEl.textContent = '';
+          const message = 'エラー: ' + (err.message || err);
+          const container = document.getElementById('main_container');
+          if (container.querySelector('#loading')) container.querySelector('#loading').textContent = message;
+          else alert(message);
+        })
+        .fetchChartDataForPeriod(seriesKind, seriesId, days);
+    }
 
     function hasExtraData(rows) {
       return rows.some(function (r) { return r.extra !== undefined && r.extra !== null; });
@@ -358,28 +391,14 @@
     <span id="status"></span>
     <button id="closeBtn" type="button" onclick="google.script.host.close()">閉じる</button>
   </div>
-  <div id="main_container"></div>
+  <div id="main_container"><div id="loading">チャートを読み込み中…</div></div>
 
   <script>
     document.addEventListener('DOMContentLoaded', function () {
       const select = document.getElementById('periodSelect');
       select.value = String(initialPeriodDays);
-
-      select.addEventListener('change', function () {
-        const days = this.value;
-        const statusEl = document.getElementById('status');
-        statusEl.textContent = '読み込み中…';
-        google.script.run
-          .withSuccessHandler(function (bundle) {
-            statusEl.textContent = '';
-            render(bundle);
-          })
-          .withFailureHandler(function (err) {
-            statusEl.textContent = '';
-            alert('エラー: ' + (err.message || err));
-          })
-          .fetchChartDataForPeriod(seriesKind, seriesId, days);
-      });
+      select.addEventListener('change', function () { loadPeriod(this.value); });
+      loadPeriod(initialPeriodDays);
     });
   </script>
 </body>
