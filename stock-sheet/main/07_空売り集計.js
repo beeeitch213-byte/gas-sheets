@@ -5,8 +5,6 @@
 // どちらも「実注文/空売り(価格規制あり)/空売り(価格規制なし)/合計」の4区分 × 売買代金・比率で構成される。
 const SHORT_SELL_SHEET_NAME = '空売り集計';
 
-const SHORT_SELL_PDF_ATT_ID = 't13vrt0000026iy6-att'; // JPXが添付IDを変更した場合はindex.htmlから探すフォールバックで対応
-
 const SHORT_SELL_CATEGORIES = ['実注文', '空売り（価格規制あり）', '空売り（価格規制なし）', '合計'];
 
 // 業種別集計PDF内での検索に使うラベル(表記ゆれがある項目はsearchで別指定)。シート上の列順もこの並びに従う。
@@ -46,12 +44,6 @@ function buildIndustryShortSellSeriesByLabel(industryLabel) {
   return buildShortSellChartSeries(block.col);
 }
 
-function shortSellPdfUrl_(dateStr, suffix) {
-  const parts = dateStr.split('-');
-  const ymd = parts[0].slice(-2) + parts[1] + parts[2];
-  return 'https://www.jpx.co.jp/markets/statistics-equities/short-selling/' + SHORT_SELL_PDF_ATT_ID + '/' + ymd + '-' + suffix + '.pdf';
-}
-
 /**
  * 対象日が含まれる月の一覧ページのURLを返す。
  * 当月分はindex.html、1ヶ月前は00-archives-01.html、2ヶ月前は00-archives-02.html...12ヶ月前は00-archives-12.html
@@ -66,36 +58,45 @@ function shortSellArchivePageUrl_(dateStr) {
   return 'https://www.jpx.co.jp/markets/statistics-equities/short-selling/00-archives-' + String(monthsBack).padStart(2, '0') + '.html';
 }
 
-function findShortSellPdfUrlFromPage_(pageUrl, dateStr, suffix) {
+/**
+ * 指定日の市場全体(m)・業種別(g)のPDFのURLを、該当月の一覧ページから探して{m, g}で返す(見つからない方はnull)。
+ * PDFの添付IDは日ごとに変わるため、URLは組み立てずに一覧ページのリンクを使う。
+ */
+function findShortSellPdfUrls_(dateStr) {
+  const urls = { m: null, g: null };
+  const pageUrl = shortSellArchivePageUrl_(dateStr);
+  if (!pageUrl) return urls;
+  const response = UrlFetchApp.fetch(pageUrl, { muteHttpExceptions: true });
+  if (response.getResponseCode() !== 200) return urls;
+  const html = response.getContentText();
   const parts = dateStr.split('-');
   const ymd = parts[0].slice(-2) + parts[1] + parts[2];
-  const response = UrlFetchApp.fetch(pageUrl, { muteHttpExceptions: true });
-  if (response.getResponseCode() !== 200) return null;
-  const html = response.getContentText();
-  const re = new RegExp('href="((?:https://www\\.jpx\\.co\\.jp)?/markets/statistics-equities/short-selling/[^"]+' + ymd + '-' + suffix + '\\.pdf)"');
-  const m = html.match(re);
-  if (!m) return null;
-  return m[1].startsWith('http') ? m[1] : 'https://www.jpx.co.jp' + m[1];
+  Object.keys(urls).forEach(suffix => {
+    const re = new RegExp('href="((?:https://www\\.jpx\\.co\\.jp)?/markets/statistics-equities/short-selling/[^"]+' + ymd + '-' + suffix + '\\.pdf)"');
+    const m = html.match(re);
+    if (m) urls[suffix] = m[1].startsWith('http') ? m[1] : 'https://www.jpx.co.jp' + m[1];
+  });
+  return urls;
 }
 
 /**
- * 指定日のPDFテキストを取得する。当月分は添付URLを直接組み立てて試し(速いが添付IDが変わると失敗する)、
- * ダメなら該当月の一覧ページ(当月index.html、過去月は00-archives-NN.html)からリンクを探す。
- * 過去月は直接構築を飛ばし、最初から一覧ページを使う(添付IDが月ごとに異なりうるため)。
+ * 指定日の市場全体(m)・業種別(g)のPDFを並列で取得し、テキストを{m, g}で返す(取得できない方はnull)。
+ * 自前の解析で読めない場合だけDrive変換で読み直す。
  */
-function fetchShortSellPdfText_(dateStr, suffix) {
-  const pageUrl = shortSellArchivePageUrl_(dateStr);
-  const isCurrentMonth = pageUrl && pageUrl.indexOf('index.html') !== -1;
-
-  let text = null;
-  if (isCurrentMonth) {
-    text = fetchPdfTextFromUrl_(shortSellPdfUrl_(dateStr, suffix));
-  }
-  if (!text && pageUrl) {
-    const url = findShortSellPdfUrlFromPage_(pageUrl, dateStr, suffix);
-    if (url) text = fetchPdfTextFromUrl_(url);
-  }
-  return text;
+function fetchShortSellPdfTexts_(dateStr) {
+  const urls = findShortSellPdfUrls_(dateStr);
+  const isReadable = {
+    m: text => !!parseShortSellMarketPdfText_(text),
+    g: text => {
+      const data = parseShortSellIndustryPdfText_(text);
+      return SHORT_SELL_INDUSTRIES.every(ind => data[ind.label]);
+    }
+  };
+  const suffixes = Object.keys(urls).filter(s => urls[s]);
+  const responses = suffixes.length > 0 ? UrlFetchApp.fetchAll(suffixes.map(s => ({ url: urls[s], muteHttpExceptions: true }))) : [];
+  const texts = { m: null, g: null };
+  suffixes.forEach((s, i) => { texts[s] = pdfResponseToText_(responses[i], isReadable[s]); });
+  return texts;
 }
 
 /**
@@ -157,8 +158,9 @@ function parseShortSellIndustryPdfText_(fullText) {
  */
 function fetchShortSellDataForDate(dateStr) {
   try {
-    const marketText = fetchShortSellPdfText_(dateStr, 'm');
-    const industryText = fetchShortSellPdfText_(dateStr, 'g');
+    const texts = fetchShortSellPdfTexts_(dateStr);
+    const marketText = texts.m;
+    const industryText = texts.g;
     if (!marketText && !industryText) return null;
 
     const result = {};
