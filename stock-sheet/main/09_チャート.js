@@ -23,14 +23,32 @@ function showChartForActiveCell() {
     return;
   }
 
-  const code = sheet.getRange(2, baseCol).getValue();
+  const codeAndName = sheet.getRange(2, baseCol, 2, 1).getValues(); // 2行目=銘柄コード、3行目=銘柄名
+  const code = codeAndName[0][0];
 
   if (!code) {
     SpreadsheetApp.getUi().alert('選択した列に銘柄コードが見つかりません。');
     return;
   }
 
-  showMovingAverageChart(code);
+  showMovingAverageChart(code, marketItem ? marketItem.name : String(codeAndName[1][0] || ''));
+}
+
+/** チャートのタイトル(例: 「トヨタ自動車 7203 のチャート」) */
+function chartTitleText_(code, stockName) {
+  return (stockName ? stockName + ' ' : '') + code + ' のチャート';
+}
+
+/**
+ * DateをJST(Asia/Tokyo)の {key: 'yyyy-MM-dd', label: 'MM/dd'} にする。
+ * チャートの組み立てでは日付ごとに何千回も呼ぶため、遅いUtilities.formatDateの代わりに使う
+ * (JSTは夏時間がないので、+9時間してUTCとして読めばよい)。
+ */
+function chartDateParts_(d) {
+  const t = new Date(d.getTime() + 9 * 3600000);
+  const mm = String(t.getUTCMonth() + 1).padStart(2, '0');
+  const dd = String(t.getUTCDate()).padStart(2, '0');
+  return { key: t.getUTCFullYear() + '-' + mm + '-' + dd, label: mm + '/' + dd };
 }
 
 /**
@@ -41,13 +59,11 @@ function showChartForActiveCell() {
  */
 function buildChartRowsWithMA_(points, period, rateDecimals) {
   if (rateDecimals === undefined || rateDecimals === null) rateDecimals = 2;
+  let windowSum = 0; // 直近period個の合計(1つずつ足し引きして、毎回period個を足し直さない)
   return points.map((p, idx) => {
-    let ma = null;
-    if (idx >= period - 1) {
-      const windowSlice = points.slice(idx - period + 1, idx + 1);
-      const sum = windowSlice.reduce((s, x) => s + x.value, 0);
-      ma = sum / period;
-    }
+    windowSum += p.value;
+    if (idx >= period) windowSum -= points[idx - period].value;
+    const ma = idx >= period - 1 ? windowSum / period : null;
 
     let changeStr = '---';
     let rateStr = '---';
@@ -62,8 +78,10 @@ function buildChartRowsWithMA_(points, period, rateDecimals) {
       }
     }
 
+    const dateParts = chartDateParts_(p.date);
     const row = {
-      date: Utilities.formatDate(p.date, 'Asia/Tokyo', 'MM/dd'),
+      dateKey: dateParts.key,
+      date: dateParts.label,
       close: p.value,
       ma: ma,
       change: changeStr,
@@ -100,18 +118,22 @@ function fetchStockRawPoints_(code) {
     throw new Error('データベースシートがまだ存在しません');
   }
 
+  // 当月シートの2行目(銘柄コード・業種)と3行目(銘柄名)を1回で読み、銘柄名・業種・列位置をまとめて取る
+  // (業種・列位置はbuildStockChartBundle_で使い回し、同じ行を何度も読まないようにする)
   const sheet = getTargetSheet(new Date());
-  let stockName = '';
+  let stockName = '', industryLabel = '', sheetCol = null;
   const marketMatch = MARKET_VALUE_ITEMS.find(item => item.code === String(code));
   if (marketMatch) {
     stockName = marketMatch.name;
   } else if (sheet) {
     const lastCol = sheet.getLastColumn();
-    const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
-    const nameRow = sheet.getRange(3, 1, 1, lastCol).getValues()[0];
+    const headRows = sheet.getRange(2, 1, 2, lastCol).getValues();
+    const codeRow = headRows[0], nameRow = headRows[1];
     for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
       if (String(codeRow[col - 1]) === String(code)) {
         stockName = String(nameRow[col - 1] || '');
+        industryLabel = String(codeRow[col] || ''); // 業種は銘柄コードの右隣のセル
+        sheetCol = col;
         break;
       }
     }
@@ -147,7 +169,13 @@ function fetchStockRawPoints_(code) {
   }
   points.sort((a, b) => a.date - b.date);
 
-  return { points: points, titleText: (stockName ? stockName + ' ' : '') + code + ' のチャート' };
+  return {
+    points: points,
+    titleText: chartTitleText_(code, stockName),
+    industryLabel: industryLabel,
+    sheetName: sheet ? sheet.getName() : '',
+    sheetCol: sheetCol
+  };
 }
 
 /**
@@ -213,7 +241,7 @@ function mergeSeriesForBandsChart_(seriesSpecs) {
     const rows = buildChartRowsWithMA_(spec.points, MA_PERIOD, spec.rateDecimals === undefined ? 2 : spec.rateDecimals);
     spec.points.forEach((p, idx) => {
       const row = rows[idx];
-      const dateKey = Utilities.formatDate(p.date, 'Asia/Tokyo', 'yyyy-MM-dd');
+      const dateKey = row.dateKey;
       if (!map[dateKey]) map[dateKey] = { dateKey: dateKey, date: row.date };
       const m = map[dateKey];
       m[spec.prefix + 'Value'] = row.close;
@@ -242,8 +270,9 @@ function filterMergedRowsByPeriod_(rows, periodDays) {
  * 各月シートの信用残行(39行目〜)から、指定銘柄(または市場コード1001〜1003)の日次信用残の履歴を集める。
  * JPXの日次信用残は2026年10月分からのため、2026年10月以降のシートだけを読む。
  * 戻り値: [{date, sell, buy, ratio}](日付昇順。売残・買残は市場なら百万株、個別銘柄なら千株)
+ * knownCols: {シート名: 列}(省略可)。列位置が分かっているシートは銘柄コードの行を読まずに済ませる。
  */
-function fetchMarginHistory_(code) {
+function fetchMarginHistory_(code, knownCols) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const market = MARKET_VALUE_ITEMS.find(item => item.code === String(code));
   const points = [];
@@ -253,7 +282,8 @@ function fetchMarginHistory_(code) {
     const days = getDaysInMonth(ym.year, ym.month);
     if (sheet.getMaxRows() < MARGIN_FIRST_ROW + days - 1) return;
 
-    let col = market ? market.col : null;
+    // knownCols: {シート名: 列} で列位置が分かっているシートは、2行目を読み直さない
+    let col = market ? market.col : ((knownCols && knownCols[sheet.getName()]) || null);
     if (!col) {
       const lastCol = sheet.getLastColumn();
       if (lastCol < STOCK_START_COL) return;
@@ -296,7 +326,9 @@ function buildStockChartBundle_(code, periodDays) {
   const notes = [];
 
   // 信用残(日次)の履歴
-  const marginPoints = fetchMarginHistory_(code);
+  const knownCols = {};
+  if (stockRaw.sheetCol) knownCols[stockRaw.sheetName] = stockRaw.sheetCol;
+  const marginPoints = fetchMarginHistory_(code, knownCols);
   const ratioPoints = marginPoints.filter(p => typeof p.ratio === 'number').map(p => ({ date: p.date, value: p.ratio }));
   if (ratioPoints.length > 0) {
     specs.push({ points: ratioPoints, prefix: 'ratio', rateDecimals: 2 });
@@ -306,7 +338,8 @@ function buildStockChartBundle_(code, periodDays) {
   }
 
   // 業種売買代金合計+業種の空売り売買代金合計(同じ軸)
-  const industryLabel = getStockIndustryLabel_(code);
+  // 当月シートに業種が無いときだけ、テンプレートも含めて探し直す
+  const industryLabel = stockRaw.industryLabel || getStockIndustryLabel_(code);
   const series = industryLabel ? buildIndustryShortSellSeriesByLabel(industryLabel) : null;
   if (!industryLabel) {
     notes.push('この銘柄には業種情報が設定されていません。「機能」メニュー→「業種情報を一括取得(銘柄選択)」から設定してください。');
@@ -359,18 +392,20 @@ function buildStockChartBundle_(code, periodDays) {
   };
 }
 
-function renderChartDialog_(bundle, seriesKind, seriesId, initialPeriodDays) {
+/**
+ * チャートのダイアログを先に開く。データはダイアログ側からfetchChartDataForPeriodで取得する
+ * (データの組み立てとGoogle Chartsの読み込みを同時に進めて、表示までの待ち時間を短くするため)。
+ */
+function renderChartDialog_(seriesKind, seriesId, initialPeriodDays, titleText) {
   const template = HtmlService.createTemplateFromFile('ChartDialog');
-  template.bundleJson = JSON.stringify(bundle);
-  template.titleText = bundle.titleText;
   template.seriesKind = seriesKind;
   template.seriesId = String(seriesId);
   template.initialPeriodDays = initialPeriodDays;
 
-  // bandsモード(終値ボタン)は画面いっぱいに近い高さで開く(表示が窮屈な場合はCHART_DIALOG_HEIGHTを調整)
-  const height = bundle.mode === 'bands' ? CHART_DIALOG_HEIGHT : 530;
+  // 終値ボタン(bandsモード)は画面いっぱいに近い高さで開く(表示が窮屈な場合はCHART_DIALOG_HEIGHTを調整)
+  const height = seriesKind === 'stock' ? CHART_DIALOG_HEIGHT : 530;
   const html = template.evaluate().setWidth(1050).setHeight(height);
-  SpreadsheetApp.getUi().showModalDialog(html, bundle.titleText);
+  SpreadsheetApp.getUi().showModalDialog(html, titleText);
 }
 
 /**
@@ -387,15 +422,9 @@ function fetchChartDataForPeriod(seriesKind, seriesId, periodDays) {
   throw new Error('不明な種別です: ' + seriesKind);
 }
 
-function showMovingAverageChart(code) {
-  let bundle;
-  try {
-    bundle = buildStockChartBundle_(code, CHART_DISPLAY_MONTHS * 30);
-  } catch (e) {
-    SpreadsheetApp.getUi().alert(e.message);
-    return;
-  }
-  renderChartDialog_(bundle, 'stock', code, CHART_DISPLAY_MONTHS * 30);
+/** stockNameはタイトル用(省略可)。データの取得でエラーになった場合はダイアログ内に表示される */
+function showMovingAverageChart(code, stockName) {
+  renderChartDialog_('stock', code, CHART_DISPLAY_MONTHS * 30, chartTitleText_(code, stockName));
 }
 
 /**
@@ -411,12 +440,10 @@ function showShortSellChartForActiveCell() {
   }
 
   const col = sheet.getActiveCell().getColumn();
-  let bundle;
-  try {
-    bundle = wrapSinglePanelBundle_(buildShortSellChartPayload_(col, 0)); // 初期表示は全期間
-  } catch (e) {
-    SpreadsheetApp.getUi().alert(e.message);
+  const block = SHORT_SELL_COLUMN_BLOCKS.find(b => col === b.col || col === b.col + 1);
+  if (!block) {
+    SpreadsheetApp.getUi().alert('この列の履歴データが見つかりません。売買代金または比率の列のセルを選択してから実行してください。');
     return;
   }
-  renderChartDialog_(bundle, 'shortsell', col, 0);
+  renderChartDialog_('shortsell', col, 0, block.label); // 初期表示は全期間
 }
