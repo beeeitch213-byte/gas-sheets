@@ -168,7 +168,8 @@
       return ticks;
     }
 
-    function computeBandAxis(rows, keys, fracMin, fracMax, gridColor, textPosition, format) {
+    /** tickCount: 目盛りの数の目安(省略時4。帯が低いときは少なめにする) */
+    function computeBandAxis(rows, keys, fracMin, fracMax, gridColor, textPosition, format, tickCount) {
       let dmin = null, dmax = null;
       rows.forEach(function (r) {
         keys.forEach(function (k) {
@@ -184,7 +185,7 @@
       const bandHeight = fracMax - fracMin;
       const range = (dmax - dmin) / bandHeight;
       const axisMin = dmin - range * fracMin;
-      const ticks = computeNiceTicks_(dmin, dmax, 4);
+      const ticks = computeNiceTicks_(dmin, dmax, tickCount || 4);
       return {
         viewWindow: { min: axisMin, max: axisMin + range },
         textPosition: textPosition || 'none',
@@ -262,7 +263,7 @@
       // inner=物理的な余白がないため、ネイティブのラベルは消し、描画後にプロットエリア内側の左寄りへ自前で重ねて描画する。
       axesDefs.forEach(function (ax, axisIdx) {
         const textPosition = (ax.position === 'left' || ax.position === 'right') ? 'out' : 'none';
-        const axisConfig = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format);
+        const axisConfig = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format, ax.tickCount);
         vAxes[axisIdx] = axisConfig;
         if (ax.position === 'inner') {
           manualLabelAxes.push({ axisIndex: axisIdx, ticks: axisConfig.ticks, color: ax.color });
