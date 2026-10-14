@@ -312,7 +312,8 @@ function fetchMarginHistory_(code, knownCols) {
  *   中段: 業種売買代金合計(水色)・その移動平均(オレンジ)と、業種の空売り(あり+なし)売買代金合計(黒)・その移動平均(グレー)
  *         (どちらも百万円単位なので同じ軸で表示)
  *   下段: 信用売残(青)・信用買残(赤)(市場は百万株、個別銘柄は千株)
- * axes: 縦軸ごとの帯の位置・目盛りの色・表示位置(left=左外側 / right=右外側 / inner=プロットエリア内側の左寄りに自前描画)
+ * axes: 縦軸ごとの帯の位置・目盛りの色・表示位置(left=左外側 / right=右外側 / inner=左外側に自前描画 / innerRight=右外側に自前描画)。
+ *       tickCount=目盛りの数の目安(省略時4)、centerOnMean=trueなら平均値が帯の縦の中央に来るように範囲を決める
  * series: 各線。axisIndexでどの縦軸に属するかを指定する(帯への割り振りはChartDialog.html側で行う)。
  */
 function buildStockChartBundle_(code, periodDays) {
@@ -365,14 +366,14 @@ function buildStockChartBundle_(code, periodDays) {
   }
 
   // 信用売残・買残。桁が大きく違うことが多い(例: 売残5千株・買残4万株)ため、同じ軸にすると
-  // 線が帯の上端と下端に分かれて見づらい。下段の帯を上下に分け、買残(上)・売残(下)にそれぞれの値の
-  // 付近だけを映す軸を持たせて、目盛り線が各線の近くに来るようにする。
+  // 線が帯の上端と下端に分かれて見づらい。同じ帯に重ねたまま売残・買残に別々の軸を持たせ、
+  // 目盛りは売残を左・買残を右に表示する。どちらも平均値が帯の縦の中央に来るように範囲を決める(centerOnMean)。
   if (marginPoints.length > 0) {
     const marginUnit = MARKET_VALUE_ITEMS.some(item => item.code === String(code)) ? '百万株' : '千株';
-    axes.push({ band: [0.18, 0.30], color: '#d93025', position: 'inner', format: '#,##0.###', tickCount: 3 });
-    const buyAxis = axes.length - 1;
-    axes.push({ band: [0.03, 0.15], color: '#1a73e8', position: 'inner', format: '#,##0.###', tickCount: 3 });
+    axes.push({ band: [0.03, 0.30], color: '#1a73e8', position: 'inner', format: '#,##0.###', centerOnMean: true });
     const sellAxis = axes.length - 1;
+    axes.push({ band: [0.03, 0.30], color: '#d93025', position: 'innerRight', format: '#,##0.###', centerOnMean: true });
+    const buyAxis = axes.length - 1;
     specs.push({ points: marginPoints.map(p => ({ date: p.date, value: p.sell })), prefix: 'sell', rateDecimals: 2 });
     specs.push({ points: marginPoints.map(p => ({ date: p.date, value: p.buy })), prefix: 'buy', rateDecimals: 2 });
     seriesDefs.push({ axisIndex: sellAxis, key: 'sellValue', changeKey: 'sellChange', rateKey: 'sellRate',
