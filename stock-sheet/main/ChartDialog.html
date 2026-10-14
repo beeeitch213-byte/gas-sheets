@@ -168,19 +168,31 @@
       return ticks;
     }
 
-    /** tickCount: 目盛りの数の目安(省略時4。帯が低いときは少なめにする) */
-    function computeBandAxis(rows, keys, fracMin, fracMax, gridColor, textPosition, format, tickCount) {
-      let dmin = null, dmax = null;
+    /**
+     * tickCount: 目盛りの数の目安(省略時4)。
+     * centerOnMean: trueなら、平均値が帯の縦の中央に来るよう、平均から上下に同じ幅の範囲を取る。
+     */
+    function computeBandAxis(rows, keys, fracMin, fracMax, gridColor, textPosition, format, tickCount, centerOnMean) {
+      let dmin = null, dmax = null, sum = 0, count = 0;
       rows.forEach(function (r) {
         keys.forEach(function (k) {
           const v = r[k];
           if (typeof v === 'number') {
             if (dmin === null || v < dmin) dmin = v;
             if (dmax === null || v > dmax) dmax = v;
+            sum += v;
+            count++;
           }
         });
       });
       if (dmin === null) { dmin = 0; dmax = 1; }
+      if (centerOnMean && count > 0) {
+        const mean = sum / count;
+        let half = Math.max(dmax - mean, mean - dmin);
+        if (half === 0) half = Math.max(1, Math.abs(mean) * 0.05);
+        dmin = mean - half;
+        dmax = mean + half;
+      }
       if (dmax === dmin) { dmax = dmin + Math.max(1, Math.abs(dmin) * 0.1); }
       const bandHeight = fracMax - fracMin;
       const range = (dmax - dmin) / bandHeight;
@@ -263,10 +275,10 @@
       // inner=物理的な余白がないため、ネイティブのラベルは消し、描画後にプロットエリア内側の左寄りへ自前で重ねて描画する。
       axesDefs.forEach(function (ax, axisIdx) {
         const textPosition = (ax.position === 'left' || ax.position === 'right') ? 'out' : 'none';
-        const axisConfig = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format, ax.tickCount);
+        const axisConfig = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format, ax.tickCount, ax.centerOnMean);
         vAxes[axisIdx] = axisConfig;
-        if (ax.position === 'inner') {
-          manualLabelAxes.push({ axisIndex: axisIdx, ticks: axisConfig.ticks, color: ax.color });
+        if (ax.position === 'inner' || ax.position === 'innerRight') {
+          manualLabelAxes.push({ axisIndex: axisIdx, ticks: axisConfig.ticks, color: ax.color, side: ax.position === 'innerRight' ? 'right' : 'left' });
         }
       });
 
@@ -333,10 +345,14 @@
           label.className = 'manual-axis-label';
           label.textContent = Math.abs(v) < 10 ? v.toLocaleString(undefined, { maximumFractionDigits: 3 }) : Math.round(v).toLocaleString();
           label.style.position = 'absolute';
-          // グラフの外側(左の余白)に、右端をプロットエリアの左端にそろえて表示する
-          // (左の余白は上段の終値の目盛りしか使っていないため、中段・下段の高さは空いている)
-          label.style.left = (chartArea.left - 6) + 'px';
-          label.style.transform = 'translateX(-100%)';
+          // グラフの外側の余白に表示する(左右の余白は上段の終値・信用倍率の目盛りしか使っていないため、
+          // 中段・下段の高さは空いている)。左は右端をプロットエリアの左端に、右は左端を右端にそろえる。
+          if (axisInfo.side === 'right') {
+            label.style.left = (chartArea.left + chartArea.width + 6) + 'px';
+          } else {
+            label.style.left = (chartArea.left - 6) + 'px';
+            label.style.transform = 'translateX(-100%)';
+          }
           label.style.top = (y - 7) + 'px';
           label.style.fontSize = '10px';
           label.style.color = axisInfo.color;
