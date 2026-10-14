@@ -364,16 +364,20 @@ function buildStockChartBundle_(code, periodDays) {
       color: '#202124', maColor: '#9e9e9e', label: '業種(' + industryLabel + ')空売り(あり+なし)売買代金合計', unit: '百万円' });
   }
 
-  // 信用売残・買残(同じ軸)
+  // 信用売残・買残。桁が大きく違うことが多い(例: 売残5千株・買残4万株)ため、同じ軸にすると
+  // 線が帯の上端と下端に分かれて見づらい。下段の帯を上下に分け、買残(上)・売残(下)にそれぞれの値の
+  // 付近だけを映す軸を持たせて、目盛り線が各線の近くに来るようにする。
   if (marginPoints.length > 0) {
     const marginUnit = MARKET_VALUE_ITEMS.some(item => item.code === String(code)) ? '百万株' : '千株';
-    axes.push({ band: [0.03, 0.30], color: '#1a73e8', position: 'inner', format: '#,##0.###' });
-    const marginAxis = axes.length - 1;
+    axes.push({ band: [0.18, 0.30], color: '#d93025', position: 'inner', format: '#,##0.###', tickCount: 3 });
+    const buyAxis = axes.length - 1;
+    axes.push({ band: [0.03, 0.15], color: '#1a73e8', position: 'inner', format: '#,##0.###', tickCount: 3 });
+    const sellAxis = axes.length - 1;
     specs.push({ points: marginPoints.map(p => ({ date: p.date, value: p.sell })), prefix: 'sell', rateDecimals: 2 });
     specs.push({ points: marginPoints.map(p => ({ date: p.date, value: p.buy })), prefix: 'buy', rateDecimals: 2 });
-    seriesDefs.push({ axisIndex: marginAxis, key: 'sellValue', changeKey: 'sellChange', rateKey: 'sellRate',
+    seriesDefs.push({ axisIndex: sellAxis, key: 'sellValue', changeKey: 'sellChange', rateKey: 'sellRate',
       color: '#1a73e8', label: '信用売残', unit: marginUnit });
-    seriesDefs.push({ axisIndex: marginAxis, key: 'buyValue', changeKey: 'buyChange', rateKey: 'buyRate',
+    seriesDefs.push({ axisIndex: buyAxis, key: 'buyValue', changeKey: 'buyChange', rateKey: 'buyRate',
       color: '#d93025', label: '信用買残', unit: marginUnit });
   } else {
     notes.push('信用残(日次)のデータがまだありません。');
