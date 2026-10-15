@@ -43,6 +43,20 @@ function addMarginRatioConditionalFormat(sheet, ratioCol) {
   sheet.setConditionalFormatRules(rules);
 }
 
+/** 新しい銘柄の前日比列と信倍率列の条件付き書式を、1回の読み書きでまとめて追加する */
+function addStockConditionalFormats_(sheet, changeCol, ratioCol) {
+  const colors = getColorSettings();
+  const changeRange = sheet.getRange(columnToLetter(changeCol) + '6:' + columnToLetter(changeCol) + '36');
+  const ratioRange = sheet.getRange(columnToLetter(ratioCol) + MARGIN_FIRST_ROW + ':' + columnToLetter(ratioCol) + (MARGIN_FIRST_ROW + 30));
+  const rules = sheet.getConditionalFormatRules();
+  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(0.0001).setFontColor(colors.changeUpColor).setRanges([changeRange]).build());
+  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThanOrEqualTo(-0.0001).setFontColor(colors.changeDownColor).setRanges([changeRange]).build());
+  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberBetween(-0.0001, 0.0001).setFontColor(colors.changeFlatColor).setRanges([changeRange]).build());
+  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(1).setFontColor(colors.ratioHighColor).setRanges([ratioRange]).build());
+  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThan(1).setFontColor(colors.ratioLowColor).setRanges([ratioRange]).build());
+  sheet.setConditionalFormatRules(rules);
+}
+
 function fillHolidayMarksForNewStock(sheet, col) {
   const parsed = parseYearMonthFromSheetName(sheet.getName());
   if (!parsed) return;
@@ -72,39 +86,41 @@ function fillHolidayMarksForNewStock(sheet, col) {
     sheet.getRange(MARGIN_FIRST_ROW, col, daysInMonth, STOCK_COL_WIDTH).setValues(marginValues);
   }
 
-  let blockStart = -1;
-  for (let i = 0; i <= holidayRowIndexes.length; i++) {
-    const isConsecutive = (i < holidayRowIndexes.length) && (i === 0 || holidayRowIndexes[i] === holidayRowIndexes[i - 1] + 1);
-    if (i < holidayRowIndexes.length && isConsecutive) {
-      if (blockStart === -1) blockStart = holidayRowIndexes[i];
-    } else {
-      if (blockStart !== -1) {
-        const len = holidayRowIndexes[i - 1] - blockStart + 1;
-        sheet.getRange(6 + blockStart, col, len, STOCK_COL_WIDTH).setBackground(HOLIDAY_COLOR);
-        if (marginValues) sheet.getRange(MARGIN_FIRST_ROW + blockStart, col, len, STOCK_COL_WIDTH).setBackground(HOLIDAY_COLOR);
-        blockStart = -1;
-      }
-      if (i < holidayRowIndexes.length) blockStart = holidayRowIndexes[i];
-    }
-  }
+  // 休場日の背景色は、連続する日をまとめた範囲の一覧にして1回で塗る(範囲ごとにsetBackgroundを呼ばない)
+  const a1List = [];
+  const colA1 = columnToLetter(col), colEndA1 = columnToLetter(col + STOCK_COL_WIDTH - 1);
+  const addRun = (startIdx, endIdx) => {
+    a1List.push(colA1 + (6 + startIdx) + ':' + colEndA1 + (6 + endIdx));
+    if (marginValues) a1List.push(colA1 + (MARGIN_FIRST_ROW + startIdx) + ':' + colEndA1 + (MARGIN_FIRST_ROW + endIdx));
+  };
+  let runStart = -1;
+  holidayRowIndexes.forEach((idx, i) => {
+    if (runStart === -1) runStart = idx;
+    const next = holidayRowIndexes[i + 1];
+    if (next !== idx + 1) { addRun(runStart, idx); runStart = -1; }
+  });
+  if (a1List.length > 0) sheet.getRangeList(a1List).setBackground(HOLIDAY_COLOR);
 }
 
 /**
  * 当月シートの不足分の終値・前日比・売買代金を埋める(新規銘柄追加時用)
  * 取得自体はfetchHistoricalClosesで行う
  */
-function fillMissingClosesForCode(code) {
+function fillMissingClosesForCode(code, prefetched, knownCol) {
   const sheet = getTargetSheet(new Date());
   if (!sheet || !parseYearMonthFromSheetName(sheet.getName())) return;
   const {year, month} = parseYearMonthFromSheetName(sheet.getName());
-  const lastCol = sheet.getLastColumn(), codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
-  let targetCol = null;
-  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) if (String(codeRow[col - 1]) === String(code)) { targetCol = col; break; }
+  let targetCol = knownCol || null; // 銘柄追加の直後は列が分かっているので、2行目を読み直さない
+  if (!targetCol) {
+    const lastCol = sheet.getLastColumn(), codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
+    for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) if (String(codeRow[col - 1]) === String(code)) { targetCol = col; break; }
+  }
   if (!targetCol) return;
 
   const today = new Date(), startDate = new Date(year, month - 1, 1);
   startDate.setDate(startDate.getDate() - 7);
-  const fetched = fetchHistoricalCloses(code, startDate, today);
+  // prefetched: 取得済みの日次チャート(3年分など、当月1日の7日前〜今日を含むもの)。無ければここで取得する
+  const fetched = prefetched || fetchHistoricalCloses(code, startDate, today);
   if (!fetched) return;
   const dataMap = fetched.dateMap, splits = fetched.splits;
 
@@ -144,9 +160,9 @@ function fillMissingClosesForCode(code) {
  * 当月シートの不足分の信用残・信用倍率を埋める(新規銘柄追加時用)
  * JPXの日次信用残PDFを日ごとに読むため時間がかかることがある。途中で止まった分は毎日の自動更新で埋まる。
  */
-function fillMissingMarginForCode(code) {
+function fillMissingMarginForCode(code, knownCol) {
   try {
-    return fillMarginForCode(code);
+    return fillMarginForCode(code, knownCol);
   } catch (e) {
     Logger.log('信用残の補完に失敗(' + code + '): ' + e);
     return '';
@@ -210,13 +226,39 @@ function addNewStockFromDialog(code, name) {
   return '銘柄コード ' + code + '(' + name + ')を追加しました';
 }
 
+/**
+ * 銘柄追加に使う外部データ(業種と3年分の日次終値)を同時に取得する。
+ * 3年分の日次終値は、当月シートの不足分の入力とデータベースの初期構築の両方に使う(Yahooに2回問い合わせない)。
+ * 並列取得で取れなかった分は、従来の取得関数(リトライ・会社概要ページの確認付き)で取り直す。
+ */
+function prefetchNewStockData_(code) {
+  const today = new Date();
+  const startDate = new Date(today);
+  startDate.setFullYear(startDate.getFullYear() - DB_BACKFILL_YEARS);
+  const headers = { 'User-Agent': 'Mozilla/5.0' };
+  let responses = [];
+  try {
+    responses = UrlFetchApp.fetchAll([
+      { url: 'https://finance.yahoo.co.jp/quote/' + code + '.T', muteHttpExceptions: true, headers: headers },
+      { url: fetchHistoricalChart(code, startDate, today), muteHttpExceptions: true, headers: headers }
+    ]);
+  } catch (e) {
+    responses = [];
+  }
+  const ok = r => r && r.getResponseCode() === 200;
+  const industry = (ok(responses[0]) && parseIndustryFromHtml_(code, responses[0].getContentText())) || fetchStockIndustry(code) || '';
+  const history = (ok(responses[1]) && parseHistoricalChart(responses[1].getContentText())) || fetchHistoricalCloses(code, startDate, today);
+  return { industry: industry, history: history };
+}
+
 function addNewStock(code, name) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const template = ss.getSheetByName(TEMPLATE_SHEET_NAME);
   const currentSheet = getTargetSheet(new Date());
   const templateIsActive = template && ss.getActiveSheet().getName() === template.getName();
-  // 業種はYahoo!ファイナンスから一度だけ取得し、テンプレート・当月シート両方に同じ値を使う
-  const industry = fetchStockIndustry(code) || '';
+  // 業種と3年分の日次終値は最初に1回だけ(同時に)取得し、テンプレート・当月シート・データベースで使い回す
+  const prefetched = prefetchNewStockData_(code);
+  const industry = prefetched.industry;
 
   function processTemplate() {
     if (!template) return;
@@ -230,9 +272,9 @@ function addNewStock(code, name) {
     if (addedCol) {
       currentSheet.setActiveRange(currentSheet.getRange(1, addedCol + STOCK_COL_WIDTH + 2));
       fillHolidayMarksForNewStock(currentSheet, addedCol);
-      fillMissingClosesForCode(code);
-      backfillDatabaseForCode(code);
-      fillMissingMarginForCode(code);
+      fillMissingClosesForCode(code, prefetched.history, addedCol);
+      backfillDatabaseForCode(code, prefetched.history);
+      fillMissingMarginForCode(code, addedCol);
     }
   }
 
@@ -275,24 +317,26 @@ function addStockColumnToSheet(sheet, code, name, industry) {
     }
   }
 
-  // 2行目: 1列目=銘柄コード(単独セル)、2〜3列目(2列結合)=業種情報
-  sheet.getRange(2, newCol).setValue(code);
+  // 2行目: 1列目=銘柄コード(単独セル)、2〜3列目(2列結合)=業種情報 / 3行目=銘柄名(3列結合) / 4行目=スパークライン(3列結合)
+  // 先に結合だけしておき、2〜5行目の値・数式はまとめて1回で書き込む(結合の左上以外のセルには空文字を入れる)
   sheet.getRange(2, newCol + 1, 1, 2).merge();
-  if (industry) sheet.getRange(2, newCol + 1).setValue(industry);
-  sheet.getRange(3, newCol, 1, STOCK_COL_WIDTH).merge().setValue(name);
+  sheet.getRange(3, newCol, 1, STOCK_COL_WIDTH).merge();
+  sheet.getRange(4, newCol, 1, STOCK_COL_WIDTH).merge();
 
   const dbSheet = getOrCreateDatabaseSheet();
   const dbCol = getOrCreateDatabaseColumn(dbSheet, code);
-  sheet.getRange(4, newCol, 1, STOCK_COL_WIDTH).merge().setFormula(buildSparklineFormula(columnToLetter(dbCol)));
-
-  sheet.getRange(5, newCol, 1, STOCK_COL_WIDTH).setValues([['終値', '前日比', '売買代金']]);
+  sheet.getRange(2, newCol, 4, STOCK_COL_WIDTH).setValues([
+    [code, industry || '', ''],
+    [name, '', ''],
+    [buildSparklineFormula(columnToLetter(dbCol)), '', ''],
+    ['終値', '前日比', '売買代金']
+  ]);
 
   if (sheet.getMaxRows() >= MARGIN_HEADER_ROW) {
     sheet.getRange(MARGIN_HEADER_ROW, newCol, 1, STOCK_COL_WIDTH).setValues([['売残', '買残', '信倍率']]);
   }
 
-  try { addChangeConditionalFormat(sheet, newCol + 1); } catch (e) {}
-  try { addMarginRatioConditionalFormat(sheet, newCol + 2); } catch (e) {}
+  try { addStockConditionalFormats_(sheet, newCol + 1, newCol + 2); } catch (e) {}
 
   return newCol;
 }
