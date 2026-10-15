@@ -574,6 +574,110 @@ const MARGIN_WEEKDAY_NAMES_ = ['日曜日', '月曜日', '火曜日', '水曜日
 
 const MARGIN_PREFETCH_BATCH = 5; // mtall.pdf(1ファイル約1.8MB)を同時にダウンロードする数
 
+// ==== 日次信用残のドライブ保存 ====
+// JPXは日次信用残(mtall.pdf)を直近5営業日分しか公開していない。そのため、月の途中で銘柄を追加すると、
+// それより前の日の信用残が取れなくなる。mtall.pdfを読み取ったら全銘柄分の結果をドライブに1日1ファイル
+// (gzip圧縮したJSON、1日あたり約30〜40KB)で保存しておき、PDFが消えた後もそこから埋められるようにする。
+const MARGIN_ARCHIVE_FOLDER_NAME = '株式情報_信用残データ';
+const MARGIN_ARCHIVE_FOLDER_ID_KEY = 'MARGIN_ARCHIVE_FOLDER_ID'; // スクリプトプロパティにフォルダIDを覚えておく
+
+let marginArchiveFolderCache_ = null;
+
+/** 保存用フォルダを返す(無ければマイドライブ直下に作る) */
+function getMarginArchiveFolder_() {
+  if (marginArchiveFolderCache_) return marginArchiveFolderCache_;
+  const props = PropertiesService.getScriptProperties();
+  const savedId = props.getProperty(MARGIN_ARCHIVE_FOLDER_ID_KEY);
+  if (savedId) {
+    try {
+      const folder = DriveApp.getFolderById(savedId);
+      if (!folder.isTrashed()) return (marginArchiveFolderCache_ = folder);
+    } catch (e) {}
+  }
+  const found = DriveApp.getFoldersByName(MARGIN_ARCHIVE_FOLDER_NAME);
+  const folder = found.hasNext() ? found.next() : DriveApp.createFolder(MARGIN_ARCHIVE_FOLDER_NAME);
+  props.setProperty(MARGIN_ARCHIVE_FOLDER_ID_KEY, folder.getId());
+  return (marginArchiveFolderCache_ = folder);
+}
+
+function marginArchiveFileName_(ymd) {
+  return 'mtall_' + ymd + '.json.gz';
+}
+
+/** ドライブに保存済みの日('yyyyMMdd')の一覧を {ymd: true} で返す(対象の日付が含まれる月のファイルだけを探す) */
+function listMarginArchiveDays_(ymds) {
+  const saved = {};
+  const months = {};
+  ymds.forEach(ymd => { months[ymd.substring(0, 6)] = true; });
+  try {
+    const folder = getMarginArchiveFolder_();
+    Object.keys(months).forEach(ym => {
+      const files = folder.searchFiles("title contains 'mtall_" + ym + "'");
+      while (files.hasNext()) {
+        const m = files.next().getName().match(/^mtall_(\d{8})\.json\.gz$/);
+        if (m) saved[m[1]] = true;
+      }
+    });
+  } catch (e) {
+    Logger.log('信用残データの保存先を確認できませんでした: ' + e);
+  }
+  return saved;
+}
+
+/** ドライブに保存した日次信用残を読む(無ければnull) */
+function readMarginArchive_(ymd) {
+  try {
+    const files = getMarginArchiveFolder_().getFilesByName(marginArchiveFileName_(ymd));
+    if (!files.hasNext()) return null;
+    const blob = files.next().getBlob().setContentType('application/x-gzip');
+    return JSON.parse(Utilities.ungzip(blob).getDataAsString());
+  } catch (e) {
+    Logger.log('保存した信用残データを読めませんでした(' + ymd + '): ' + e);
+    return null;
+  }
+}
+
+/** 日次信用残(全銘柄分)をドライブに保存する(保存済みなら何もしない) */
+function writeMarginArchive_(ymd, data) {
+  try {
+    const folder = getMarginArchiveFolder_();
+    const name = marginArchiveFileName_(ymd);
+    if (folder.getFilesByName(name).hasNext()) return;
+    folder.createFile(Utilities.gzip(Utilities.newBlob(JSON.stringify(data), 'application/json'), name));
+  } catch (e) {
+    Logger.log('信用残データをドライブに保存できませんでした(' + ymd + '): ' + e);
+  }
+}
+
+/**
+ * JPXに公開されている直近の日次信用残のうち、まだドライブに保存していない日を保存する。
+ * 毎日の自動更新(updateMarginData)の最後に呼び、PDFが公開期間(直近5営業日)から外れる前に保存しておく。
+ */
+function archiveRecentMarginData(startMs) {
+  const started = startMs || Date.now();
+  const html = getMarginListPageHtml_();
+  if (!html) return '信用残データの保存: 一覧ページを読めませんでした';
+  const ymds = [];
+  const re = /(\d{8})_mtall\.pdf/g;
+  let m;
+  while ((m = re.exec(html)) !== null) if (ymds.indexOf(m[1]) === -1) ymds.push(m[1]);
+
+  const saved = listMarginArchiveDays_(ymds);
+  const missing = ymds.filter(ymd => !saved[ymd]).map(ymd => ymd.substring(0, 4) + '-' + ymd.substring(4, 6) + '-' + ymd.substring(6, 8));
+  if (missing.length === 0) return '信用残データの保存: 直近' + ymds.length + '日分は保存済みでした';
+
+  const prefetched = prefetchJpxMarginPdfs_(missing);
+  let count = 0;
+  for (const ds of missing) {
+    if (Date.now() - started > RUN_TIME_LIMIT_MS) break;
+    const data = fetchJpxMarginForDate_(ds, prefetched[ds]);
+    if (!data) continue;
+    writeMarginArchive_(ds.replace(/-/g, ''), data); // キャッシュから読んだ場合はまだ保存されていないので、ここで保存する
+    count++;
+  }
+  return '信用残データの保存: ' + count + '/' + missing.length + '日分をドライブに保存しました';
+}
+
 function marginPdfUrl_(ymd) {
   return 'https://www.jpx.co.jp/markets/statistics-equities/margin/tvdivq0000001rnl-att/' + ymd + '_mtall.pdf';
 }
@@ -582,12 +686,17 @@ function marginPdfUrl_(ymd) {
 // 一覧ページは1回の実行の中では変わらないので、未公表の日が何日あっても1回だけ読む
 let marginListPageHtmlCache_ = null;
 
-function findMarginPdfUrlFromList_(ymd) {
+function getMarginListPageHtml_() {
   if (marginListPageHtmlCache_ === null) {
     const response = UrlFetchApp.fetch(MARGIN_LIST_PAGE_URL, { muteHttpExceptions: true });
     if (response.getResponseCode() !== 200) return null;
     marginListPageHtmlCache_ = response.getContentText();
   }
+  return marginListPageHtmlCache_;
+}
+
+function findMarginPdfUrlFromList_(ymd) {
+  if (!getMarginListPageHtml_()) return null;
   const m = marginListPageHtmlCache_.match(new RegExp('href="([^"]*' + ymd + '_mtall\\.pdf)"'));
   if (!m) return null;
   return m[1].startsWith('http') ? m[1] : 'https://www.jpx.co.jp' + m[1];
@@ -609,7 +718,9 @@ function prefetchJpxMarginPdfs_(dateStrs) {
   const keyOf = ds => 'mtall_' + ds.replace(/-/g, '');
   let cached = {};
   try { cached = CacheService.getScriptCache().getAll(dateStrs.map(keyOf)); } catch (e) {}
-  const need = dateStrs.filter(ds => !cached[keyOf(ds)]);
+  // ドライブに保存済みの日もダウンロードしない(fetchJpxMarginForDate_が保存分を読む)
+  const archived = listMarginArchiveDays_(dateStrs.filter(ds => !cached[keyOf(ds)]).map(ds => ds.replace(/-/g, '')));
+  const need = dateStrs.filter(ds => !cached[keyOf(ds)] && !archived[ds.replace(/-/g, '')]);
   for (let i = 0; i < need.length; i += MARGIN_PREFETCH_BATCH) {
     const batch = need.slice(i, i + MARGIN_PREFETCH_BATCH);
     let responses = [];
@@ -639,6 +750,13 @@ function fetchJpxMarginForDate_(dateStr, prefetchedBytes) {
     }
   } catch (e) {}
 
+  // ドライブに保存済みならそれを使う(PDFが公開期間を過ぎて消えた日も、ここから読める)
+  const archived = readMarginArchive_(ymd);
+  if (archived) {
+    putMarginCache_(cacheKey, archived);
+    return archived;
+  }
+
   let bytes = prefetchedBytes !== undefined ? prefetchedBytes : fetchPdfBytes_(marginPdfUrl_(ymd));
   if (!bytes) {
     const alt = findMarginPdfUrlFromList_(ymd);
@@ -653,11 +771,17 @@ function fetchJpxMarginForDate_(dateStr, prefetchedBytes) {
   Object.keys(parsed.stocks).forEach(code => { result.stocks[code] = [parsed.stocks[code].sell, parsed.stocks[code].buy]; });
   Object.keys(parsed.markets).forEach(name => { result.markets[name] = [parsed.markets[name].sell, parsed.markets[name].buy]; });
 
+  putMarginCache_(cacheKey, result);
+  writeMarginArchive_(ymd, result);
+  return result;
+}
+
+/** 解析結果を6時間キャッシュする(キャッシュの1件あたりの上限を超える場合は保存しない) */
+function putMarginCache_(cacheKey, result) {
   try {
     const zipped = Utilities.base64Encode(Utilities.gzip(Utilities.newBlob(JSON.stringify(result))).getBytes());
-    if (zipped.length < 95000) cache.put(cacheKey, zipped, 21600);
+    if (zipped.length < 95000) CacheService.getScriptCache().put(cacheKey, zipped, 21600);
   } catch (e) {}
-  return result;
 }
 
 /**
@@ -813,7 +937,14 @@ function updateMarginData() {
     if (isMarginRowFilled_(date)) continue;
     messages.push(updateMarginForSpecificDate(date).message);
   }
-  const message = messages.length > 0 ? messages.join('\n') : '信用残: 未入力の日はありませんでした';
+  if (messages.length === 0) messages.push('信用残: 未入力の日はありませんでした');
+  // 公開期間(直近5営業日)を過ぎる前に、全銘柄分の信用残をドライブに保存しておく
+  try {
+    messages.push(archiveRecentMarginData(startMs));
+  } catch (e) {
+    messages.push('信用残データの保存に失敗しました: ' + e.message);
+  }
+  const message = messages.join('\n');
   Logger.log(message);
   return message;
 }

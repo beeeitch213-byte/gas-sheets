@@ -36,7 +36,8 @@ function addStockMenu() {
       .addItem('売買状況シートを新しい週が上の順に並べ替え', 'runSortJpxStatsSheetFromMenu')
       .addItem('売買状況シートの日付表示を新レイアウトに変換', 'runMigrateJpxDateLayoutFromMenu')
       .addSeparator()
-      .addItem('自動更新トリガーを設定(統合後に1回)', 'runSetupTriggersFromMenu'))
+      .addItem('自動更新トリガーを設定(統合後に1回)', 'runSetupTriggersFromMenu')
+      .addItem('信用残データ(直近5日分)をドライブに保存', 'runArchiveRecentMarginDataFromMenu'))
     .addToUi();
 }
 
@@ -195,6 +196,11 @@ function setupTriggers() {
   });
   return AUTO_TRIGGERS_.map(t => t.fn + ' : ' + (t.weekDay ? '毎週金曜' : '毎日') + ' ' + t.hour + '時台').join('\n')
     + '\n\n※株式情報_DB側のトリガーは削除してください(残すと二重に動きます)';
+}
+
+/** 「信用残データ(直近5日分)をドライブに保存」: 毎日の自動更新でも行うが、すぐに保存したいとき用 */
+function runArchiveRecentMarginDataFromMenu() {
+  runLibFromMenu_(() => archiveRecentMarginData(Date.now()), '信用残データを保存しました', '信用残データの保存に失敗しました');
 }
 
 function runSetupTriggersFromMenu() {
