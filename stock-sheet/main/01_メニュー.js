@@ -30,14 +30,7 @@ function addStockMenu() {
       .addItem('スパークラインを全シートで再設定(#REF!復旧用)', 'runReapplyAllSparklineFormulasFromMenu')
       .addSeparator()
       .addItem('市場別売買代金レイアウトを設定', 'runSetupMarketValueLayoutFromMenu')
-      .addItem('空売り集計シートの見出しを設定', 'runSetupShortSellHeadersFromMenu')
-      .addItem('業種情報レイアウトへ移行', 'runMigrateAllSheetsForIndustryLayoutFromMenu')
-      .addItem('出来高見出しを売買代金に移行', 'runMigrateAllSheetsForTradingValueHeaderFromMenu')
-      .addItem('売買状況シートを新しい週が上の順に並べ替え', 'runSortJpxStatsSheetFromMenu')
-      .addItem('売買状況シートの日付表示を新レイアウトに変換', 'runMigrateJpxDateLayoutFromMenu')
-      .addSeparator()
-      .addItem('自動更新トリガーを設定(統合後に1回)', 'runSetupTriggersFromMenu')
-      .addItem('信用残データ(直近5日分)をドライブに保存', 'runArchiveRecentMarginDataFromMenu'))
+      .addItem('空売り集計シートの見出しを設定', 'runSetupShortSellHeadersFromMenu'))
     .addToUi();
 }
 
@@ -114,14 +107,6 @@ function updateJpxStatsByDateUI() {
   SpreadsheetApp.getUi().showModalDialog(html, '投資部門別売買状況更新');
 }
 
-function runMigrateJpxDateLayoutFromMenu() {
-  runLibFromMenu_(() => migrateJpxStatsDateLayout(), '日付表示の変換が完了しました', '変換に失敗しました');
-}
-
-function runSortJpxStatsSheetFromMenu() {
-  runLibFromMenu_(() => sortJpxStatsSheetByDate(), '並べ替えが完了しました', '並べ替えに失敗しました');
-}
-
 /** JpxStatsDialogの年プルダウンから呼ばれる。その年に存在する週の一覧(新しい順)を返す */
 function listJpxWeeksForYearUI(year) {
   return listJpxWeeksForYear(year);
@@ -151,58 +136,4 @@ function runReapplyAllSparklineFormulasFromMenu() {
   } catch (e) {
     ui.alert('スパークライン再設定でエラーが発生しました: ' + e.message);
   }
-}
-
-function runMigrateAllSheetsForIndustryLayoutFromMenu() {
-  const ui = SpreadsheetApp.getUi();
-  try {
-    ui.alert(migrateAllSheetsForIndustryLayout());
-  } catch (e) {
-    ui.alert('業種レイアウト移行でエラーが発生しました: ' + e.message);
-  }
-}
-
-function runMigrateAllSheetsForTradingValueHeaderFromMenu() {
-  const ui = SpreadsheetApp.getUi();
-  try {
-    ui.alert(migrateAllSheetsForTradingValueHeader());
-  } catch (e) {
-    ui.alert('売買代金見出し移行でエラーが発生しました: ' + e.message);
-  }
-}
-
-// ==== 自動更新トリガー ====
-// 統合前は株式情報_DB側に設定していたトリガーを、このプロジェクトに作り直す。
-// 同じ関数のトリガーが既にあれば消してから作るので、何度実行しても二重にはならない。
-// 指定した「時」の中のどこかで実行される(Googleの仕様。例: 16 → 16:00〜16:59)。
-// 各データの公表時刻より後の「時」を指定している。変えたい場合は下の表を編集する。
-const AUTO_TRIGGERS_ = [
-  { fn: 'updateDailyClose', hour: 16 },              // 大引け(15:30)後: 終値・前日比・売買代金
-  { fn: 'updateMarketTradingValues', hour: 17 },     // 商況プリント２(後場、16:10頃)公表後: 市場の出来高・売買代金
-  { fn: 'updateShortSellForToday', hour: 18 },       // 空売り集計PDF(17:30頃)公表後
-  { fn: 'updateMarginData', hour: 19 },              // 日次信用残(前日までの未入力日を埋める)
-  { fn: 'updateJpxStatsForLatestWeek', hour: 20, weekDay: 'FRIDAY' } // 投資部門別(週1回)
-];
-
-function setupTriggers() {
-  const names = AUTO_TRIGGERS_.map(t => t.fn);
-  ScriptApp.getProjectTriggers().forEach(tr => {
-    if (names.indexOf(tr.getHandlerFunction()) !== -1) ScriptApp.deleteTrigger(tr);
-  });
-  AUTO_TRIGGERS_.forEach(t => {
-    let b = ScriptApp.newTrigger(t.fn).timeBased();
-    b = t.weekDay ? b.onWeekDay(ScriptApp.WeekDay[t.weekDay]).atHour(t.hour) : b.everyDays(1).atHour(t.hour);
-    b.inTimezone('Asia/Tokyo').create();
-  });
-  return AUTO_TRIGGERS_.map(t => t.fn + ' : ' + (t.weekDay ? '毎週金曜' : '毎日') + ' ' + t.hour + '時台').join('\n')
-    + '\n\n※株式情報_DB側のトリガーは削除してください(残すと二重に動きます)';
-}
-
-/** 「信用残データ(直近5日分)をドライブに保存」: 毎日の自動更新でも行うが、すぐに保存したいとき用 */
-function runArchiveRecentMarginDataFromMenu() {
-  runLibFromMenu_(() => archiveRecentMarginData(Date.now()), '信用残データを保存しました', '信用残データの保存に失敗しました');
-}
-
-function runSetupTriggersFromMenu() {
-  runLibFromMenu_(() => setupTriggers(), '自動更新トリガーを設定しました', 'トリガーの設定に失敗しました');
 }

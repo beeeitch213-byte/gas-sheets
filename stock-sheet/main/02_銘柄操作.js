@@ -341,34 +341,6 @@ function addStockColumnToSheet(sheet, code, name, industry) {
   return newCol;
 }
 
-/**
- * [初回のみ]既存シートの5行目見出し「出来高」を「売買代金」に置き換える。
- * (出来高カラムの中身自体は「終値前日比update」実行時に新しい計算式で上書きされるため、
- * ここでは見出し文字列だけを直す。既に「売買代金」になっている列はスキップされるので、再実行しても安全)
- */
-function migrateVolumeHeaderToTradingValue_(sheet) {
-  const lastCol = sheet.getLastColumn();
-  if (lastCol < STOCK_START_COL) return 0;
-  const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
-  let count = 0;
-  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
-    if (!codeRow[col - 1]) continue;
-    const headerCell = sheet.getRange(5, col + 2);
-    if (headerCell.getValue() === '出来高') {
-      headerCell.setValue('売買代金');
-      count++;
-    }
-  }
-  return count;
-}
-
-function migrateAllSheetsForTradingValueHeader() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const targets = ss.getSheets().filter(s => s.getName() === TEMPLATE_SHEET_NAME || parseYearMonthFromSheetName(s.getName()));
-  const messages = targets.map(s => s.getName() + ': ' + migrateVolumeHeaderToTradingValue_(s) + '件移行');
-  return messages.join('\n');
-}
-
 // ==== 銘柄削除機能 ====
 function getStockNameFromSheet(sheet, code) {
   if (!sheet) return null;

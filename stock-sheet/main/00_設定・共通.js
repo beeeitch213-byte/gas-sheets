@@ -16,8 +16,12 @@
  *
  * 【セットアップ】
  *  ・左メニュー「サービス」で Drive API と Google Sheets API を有効にする
- *  ・時間主導トリガーは「機能」→「データ修正」→「自動更新トリガーを設定」で一括設定できる
- *    (updateDailyClose / updateMarketTradingValues / updateShortSellForToday / updateMarginData / updateJpxStatsForLatestWeek)
+ *  ・時間主導トリガー(設定済み。作り直すときはApps Scriptエディタの「トリガー」から手動で追加する):
+ *      updateDailyClose            毎日16時台(大引け15:30後)
+ *      updateMarketTradingValues   毎日17時台(商況プリント２(後場)16:10頃公表後)
+ *      updateShortSellForToday     毎日18時台(空売り集計PDF 17:30頃公表後)
+ *      updateMarginData            毎日19時台(日次信用残。直近分のドライブ保存も行う)
+ *      updateJpxStatsForLatestWeek 毎週金曜20時台(投資部門別)
  */
 
 // ==== 設定項目 ====
