@@ -246,9 +246,56 @@ function mtParseCMap_(text) {
   return { map: map, codeLen: codeLen };
 }
 
-/** 1ページの描画命令からテキストを描画順に取り出す(文字列描画命令ごとに空白で区切る) */
+// 描画命令の区切り文字(空白類と / [ ] < > ( ) % { })かどうかを文字コードで引く表。
+// 1文字ごとに正規表現 /[\s\/\[\]<>()%{}]/ を呼ぶと遅いため(mtall.pdfは1ページで数十万文字ある)、表引きにしている。
+// 空白類は正規表現の\sのうちLatin-1の範囲にあるもの(タブ・改行・垂直タブ・改ページ・復帰・空白・ノーブレークスペース)。
+const MT_DELIMITER_ = (function () {
+  const t = new Uint8Array(256);
+  [9, 10, 11, 12, 13, 32, 160].forEach(c => { t[c] = 1; });
+  '/[]<>()%{}'.split('').forEach(ch => { t[ch.charCodeAt(0)] = 1; });
+  return t;
+})();
+
+/** operandsを後ろから見て、種類tの最後のものを返す(無ければnull) */
+function mtLastOperand_(operands, t) {
+  for (let k = operands.length - 1; k >= 0; k--) if (operands[k].t === t) return operands[k];
+  return null;
+}
+
+/**
+ * 1ページの描画命令からテキストを描画順に取り出す(文字列描画命令ごとに空白で区切る)。
+ * contentはバイト列(Uint8Array)か、それをLatin-1で文字列にしたもの。
+ */
 function mtExtractPageText_(content, fonts) {
-  const s = mtBytesToLatin1_(content);
+  const s = typeof content === 'string' ? content : mtBytesToLatin1_(content);
+  const delim = MT_DELIMITER_; // ループの中でグローバルを引かないよう、ローカルに持つ
+  // scanTokenの結果。トークンが数値(正規表現 /^[+\-]?(\d+\.?\d*|\.\d+)$/ と同じ形)か、
+  // その数値が -300 より小さいか(TJの大きな字間調整=空白とみなす値か)
+  let tokIsNumber = false, tokBelowMinus300 = false;
+  /**
+   * 位置startから区切り文字の手前までを読み進め、終わりの位置を返す(Latin-1の外の文字は区切りではない)。
+   * 同じ1回の読み進めで数値かどうかも判定する(正規表現やparseFloatを何十万回も呼ぶと遅いため)。
+   */
+  function scanToken(start) {
+    let j = start;
+    const c0 = j < n ? s.charCodeAt(j) : 0;
+    const negative = c0 === 45;
+    if (c0 === 43 || c0 === 45) j++; // + -
+    let digitsBefore = 0, digitsAfter = 0, dot = false, numeric = true, intPart = 0, fracNonZero = false;
+    for (; j < n; j++) {
+      const cc = s.charCodeAt(j);
+      if (cc < 256 && delim[cc] === 1) break;
+      if (!numeric) continue;
+      if (cc >= 48 && cc <= 57) {
+        if (dot) { digitsAfter++; if (cc !== 48) fracNonZero = true; }
+        else { digitsBefore++; if (intPart <= 300) intPart = intPart * 10 + (cc - 48); }
+      } else if (cc === 46 && !dot) dot = true; // .
+      else numeric = false;
+    }
+    tokIsNumber = numeric && (digitsBefore > 0 || (dot && digitsAfter > 0));
+    tokBelowMinus300 = tokIsNumber && negative && (intPart > 300 || (intPart === 300 && fracNonZero));
+    return j;
+  }
   const out = [];
   let font = null;
   let moved = true; // 直前の文字描画から位置移動(Td/Tm等)があったか。移動があれば空白で区切る
@@ -260,6 +307,7 @@ function mtExtractPageText_(content, fonts) {
   }
   const n = s.length;
   const operands = [];
+  let arrayDepth = 0; // 開いている [ の数。数値は TJ の配列の中でしか使わないので、配列の外の数値は積まない
 
   function decode(bytesStr) {
     if (!font) return '';
@@ -317,41 +365,47 @@ function mtExtractPageText_(content, fonts) {
       continue;
     }
     if (c === '<' || c === '>') { i += 2; continue; } // << >>(インライン辞書)は無視
-    if (c === '[') { operands.push({ t: '[' }); i++; continue; }
+    if (c === '[') { operands.push({ t: '[' }); arrayDepth++; i++; continue; }
     if (c === ']') {
       const arr = [];
-      while (operands.length && operands[operands.length - 1].t !== '[') arr.unshift(operands.pop());
+      while (operands.length && operands[operands.length - 1].t !== '[') arr.push(operands.pop());
+      arr.reverse();
       operands.pop();
+      if (arrayDepth > 0) arrayDepth--;
       operands.push({ t: 'a', v: arr });
       i++;
       continue;
     }
     if (c === '/') {
-      let j = i + 1;
-      while (j < n && !/[\s\/\[\]<>()%{}]/.test(s[j])) j++;
+      const j = scanToken(i + 1);
       operands.push({ t: 'n', v: s.substring(i + 1, j) });
       i = j;
       continue;
     }
     // 数値または演算子
-    let j = i;
-    while (j < n && !/[\s\/\[\]<>()%{}]/.test(s[j])) j++;
+    const j = scanToken(i);
+    if (tokIsNumber) {
+      // 数値が意味を持つのは、TJの配列の中で -300 より小さいもの(大きな字間調整=空白とみなす)だけ。
+      // それ以外(座標や小さな字間調整)は後で参照しないので積まない(何十万個もあり、積むだけで時間がかかる)。
+      if (arrayDepth > 0 && tokBelowMinus300) operands.push({ t: 'num', v: parseFloat(s.substring(i, j)) });
+      i = j;
+      continue;
+    }
     const tok = s.substring(i, j);
     i = j;
-    if (/^[+\-]?(\d+\.?\d*|\.\d+)$/.test(tok)) { operands.push({ t: 'num', v: parseFloat(tok) }); continue; }
 
     // 演算子
     if (tok === 'Tf') {
-      const nameOp = operands.filter(o => o.t === 'n').pop();
+      const nameOp = mtLastOperand_(operands, 'n');
       font = nameOp ? (fonts[nameOp.v] || null) : null;
     } else if (tok === 'Td' || tok === 'TD' || tok === 'Tm' || tok === 'T*') {
       moved = true;
     } else if (tok === 'Tj' || tok === "'" || tok === '"') {
       if (tok !== 'Tj') moved = true;
-      const sOp = operands.filter(o => o.t === 's').pop();
+      const sOp = mtLastOperand_(operands, 's');
       if (sOp) emit(decode(sOp.v));
     } else if (tok === 'TJ') {
-      const aOp = operands.filter(o => o.t === 'a').pop();
+      const aOp = mtLastOperand_(operands, 'a');
       if (aOp) {
         let piece = '';
         aOp.v.forEach(e => {
@@ -368,6 +422,7 @@ function mtExtractPageText_(content, fonts) {
       i = ei === -1 ? n : ei + 2;
     }
     operands.length = 0;
+    arrayDepth = 0;
   }
   return out.join('').replace(/[ \t]*\n[ \t]*/g, '\n');
 }
@@ -427,10 +482,8 @@ function mtExtractPdfText_(bytes) {
       const o = objs[parseInt(ref, 10)];
       if (o && o.stream) parts.push(mtBytesToLatin1_(o.stream));
     });
-    const joined = parts.join('\n');
-    const content = new Uint8Array(joined.length);
-    for (let k = 0; k < joined.length; k++) content[k] = joined.charCodeAt(k);
-    texts.push(mtExtractPageText_(content, fonts));
+    // 文字列のまま渡す(バイト列に戻して読み直すと、ページごとに数十万文字分の変換が2回余計にかかる)
+    texts.push(mtExtractPageText_(parts.join('\n'), fonts));
   });
   return texts.join('\n');
 }
@@ -519,15 +572,23 @@ const MARGIN_AUTO_LOOKBACK_DAYS = 10; // 自動更新(トリガー)で遡って�
 
 const MARGIN_WEEKDAY_NAMES_ = ['日曜日', '月曜日', '火曜日', '水曜日', '木曜日', '金曜日', '土曜日'];
 
+const MARGIN_PREFETCH_BATCH = 5; // mtall.pdf(1ファイル約1.8MB)を同時にダウンロードする数
+
 function marginPdfUrl_(ymd) {
   return 'https://www.jpx.co.jp/markets/statistics-equities/margin/tvdivq0000001rnl-att/' + ymd + '_mtall.pdf';
 }
 
 /** 一覧ページから該当日のPDFリンクを探す(添付フォルダ名が変わった場合のフォールバック) */
+// 一覧ページは1回の実行の中では変わらないので、未公表の日が何日あっても1回だけ読む
+let marginListPageHtmlCache_ = null;
+
 function findMarginPdfUrlFromList_(ymd) {
-  const response = UrlFetchApp.fetch(MARGIN_LIST_PAGE_URL, { muteHttpExceptions: true });
-  if (response.getResponseCode() !== 200) return null;
-  const m = response.getContentText().match(new RegExp('href="([^"]*' + ymd + '_mtall\\.pdf)"'));
+  if (marginListPageHtmlCache_ === null) {
+    const response = UrlFetchApp.fetch(MARGIN_LIST_PAGE_URL, { muteHttpExceptions: true });
+    if (response.getResponseCode() !== 200) return null;
+    marginListPageHtmlCache_ = response.getContentText();
+  }
+  const m = marginListPageHtmlCache_.match(new RegExp('href="([^"]*' + ymd + '_mtall\\.pdf)"'));
   if (!m) return null;
   return m[1].startsWith('http') ? m[1] : 'https://www.jpx.co.jp' + m[1];
 }
@@ -537,7 +598,36 @@ function findMarginPdfUrlFromList_(ymd) {
  * 戻り値: { stocks: {コード: [売残, 買残]}, markets: {プライム: [売残, 買残], ...} }(単位: 株)
  * 解析結果は6時間キャッシュする(新規銘柄追加時の補完などで同じ日を何度も読む場合の高速化)。
  */
-function fetchJpxMarginForDate_(dateStr) {
+/**
+ * 指定した日付('yyyy-MM-dd')のうち、解析結果がキャッシュに無い日のmtall.pdfをまとめて並列にダウンロードする。
+ * 戻り値: {日付: バイト列(取得できなければnull)}。キャッシュにある日は含めない(fetchJpxMarginForDate_がキャッシュを使う)。
+ * 1ファイルが約1.8MBあるため、MARGIN_PREFETCH_BATCH件ずつ取得する。
+ */
+function prefetchJpxMarginPdfs_(dateStrs) {
+  const result = {};
+  if (dateStrs.length === 0) return result;
+  const keyOf = ds => 'mtall_' + ds.replace(/-/g, '');
+  let cached = {};
+  try { cached = CacheService.getScriptCache().getAll(dateStrs.map(keyOf)); } catch (e) {}
+  const need = dateStrs.filter(ds => !cached[keyOf(ds)]);
+  for (let i = 0; i < need.length; i += MARGIN_PREFETCH_BATCH) {
+    const batch = need.slice(i, i + MARGIN_PREFETCH_BATCH);
+    let responses = [];
+    try {
+      responses = UrlFetchApp.fetchAll(batch.map(ds => ({ url: marginPdfUrl_(ds.replace(/-/g, '')), muteHttpExceptions: true })));
+    } catch (e) {
+      responses = [];
+    }
+    batch.forEach((ds, k) => { result[ds] = pdfBytesFromResponse_(responses[k]); });
+  }
+  return result;
+}
+
+/**
+ * prefetchedBytes: prefetchJpxMarginPdfs_で取得済みのPDF(取得できなかった日はnull)。
+ * 省略時(undefined)はここでダウンロードする。nullのときは直リンクを取り直さず、一覧ページから探すだけにする。
+ */
+function fetchJpxMarginForDate_(dateStr, prefetchedBytes) {
   const ymd = dateStr.replace(/-/g, '');
   const cache = CacheService.getScriptCache();
   const cacheKey = 'mtall_' + ymd;
@@ -549,7 +639,7 @@ function fetchJpxMarginForDate_(dateStr) {
     }
   } catch (e) {}
 
-  let bytes = fetchPdfBytes_(marginPdfUrl_(ymd));
+  let bytes = prefetchedBytes !== undefined ? prefetchedBytes : fetchPdfBytes_(marginPdfUrl_(ymd));
   if (!bytes) {
     const alt = findMarginPdfUrlFromList_(ymd);
     if (alt) bytes = fetchPdfBytes_(alt);
@@ -732,28 +822,82 @@ function updateMarginData() {
  * 新規銘柄追加時用: 当月の1日〜前日までの、その銘柄の信用残を埋める(入力済みの日・休場日はそのまま)。
  * 時間がかかる場合は途中で止まり、残りは毎日の自動更新または日付入力更新で埋まる。
  */
-function fillMarginForCode(code) {
+function fillMarginForCode(code, knownCol) {
   const startMs = Date.now();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   const sheet = getTargetSheet(today);
   if (!sheet) return '当月シートが見つかりません';
-  const lastCol = sheet.getLastColumn();
-  const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
-  let targetCol = null;
-  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) if (String(codeRow[col - 1]) === String(code)) { targetCol = col; break; }
+  let targetCol = knownCol || null; // 銘柄追加の直後は列が分かっているので、2行目を読み直さない
+  if (!targetCol) {
+    const lastCol = sheet.getLastColumn();
+    const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
+    for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) if (String(codeRow[col - 1]) === String(code)) { targetCol = col; break; }
+  }
   if (!targetCol) return '銘柄が見つかりません: ' + code;
 
-  let filled = 0;
-  const existing = today.getDate() > 1 ? sheet.getRange(MARGIN_FIRST_ROW, targetCol, today.getDate() - 1, 1).getValues() : [];
-  for (let d = 1; d < today.getDate(); d++) {
-    if (Date.now() - startMs > RUN_TIME_LIMIT_MS) return code + ': 信用残を' + filled + '日分入力しました(時間切れのため途中まで。残りは自動更新で埋まります)';
+  const days = today.getDate() - 1; // 1日〜昨日
+  if (days <= 0) return code + ': 信用残を0日分入力しました';
+
+  // 1日〜昨日の信用残行を、A・B列(日付・曜日)と銘柄の3列でまとめて読み、最後にまとめて書く
+  // (1日ずつupdateMarginForSpecificDateを呼ぶと、1日あたり6回ほどシートを読み書きするため)
+  const abRange = sheet.getRange(MARGIN_FIRST_ROW, 1, days, 2);
+  const blockRange = sheet.getRange(MARGIN_FIRST_ROW, targetCol, days, STOCK_COL_WIDTH);
+  const ab = abRange.getValues();
+  const block = blockRange.getValues();
+  const formats = blockRange.getNumberFormats();
+  const fillDayLabels = (i, date) => {
+    if (isMarginBlank_(ab[i][0])) ab[i][0] = date.getDate() + '日';
+    if (isMarginBlank_(ab[i][1])) ab[i][1] = MARGIN_WEEKDAY_NAMES_[date.getDay()];
+  };
+
+  const targets = [];
+  const holidayRows = [];
+  for (let d = 1; d <= days; d++) {
     const date = new Date(today.getFullYear(), today.getMonth(), d);
     if (date < MARGIN_DATA_START_DATE) continue;
-    if (!isMarginBlank_(existing[d - 1][0])) continue;
-    const r = updateMarginForSpecificDate(date, code);
-    if (r.status === 'done') filled++;
+    if (!isMarginBlank_(block[d - 1][0])) continue;
+    const dow = date.getDay();
+    if ((dow === 0 || dow === 6) || isJapaneseHoliday(date)) {
+      for (let k = 0; k < STOCK_COL_WIDTH; k++) block[d - 1][k] = HOLIDAY_LABEL;
+      fillDayLabels(d - 1, date);
+      holidayRows.push(MARGIN_FIRST_ROW + d - 1);
+      continue;
+    }
+    targets.push({ index: d - 1, date: date, dateStr: Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy-MM-dd') });
   }
+
+  // 解析結果がキャッシュに無い日のPDFは、まとめて並列にダウンロードしておく
+  const prefetched = prefetchJpxMarginPdfs_(targets.map(t => t.dateStr));
+
+  let filled = 0, timedOut = false;
+  for (const t of targets) {
+    if (Date.now() - startMs > RUN_TIME_LIMIT_MS) { timedOut = true; break; }
+    fillDayLabels(t.index, t.date);
+    const data = fetchJpxMarginForDate_(t.dateStr, prefetched[t.dateStr]);
+    if (!data) continue; // 未公表(申込日の翌営業日に公表される)
+    const pair = data.stocks[String(code)];
+    if (!pair) {
+      // 一覧にない銘柄(信用取引の対象外など)は「-」を入れて入力済み扱いにする(毎日取り直さないように)
+      for (let k = 0; k < STOCK_COL_WIDTH; k++) block[t.index][k] = '-';
+      continue;
+    }
+    const vals = marginCellValues_(pair, false);
+    for (let k = 0; k < STOCK_COL_WIDTH; k++) block[t.index][k] = vals[k];
+    formats[t.index][0] = marginNumberFormat_(vals[0], false);
+    formats[t.index][1] = marginNumberFormat_(vals[1], false);
+    filled++;
+  }
+
+  abRange.setValues(ab);
+  blockRange.setValues(block);
+  blockRange.setNumberFormats(formats);
+  if (holidayRows.length > 0) {
+    const colA1 = columnToLetter(targetCol), colEndA1 = columnToLetter(targetCol + STOCK_COL_WIDTH - 1);
+    sheet.getRangeList(holidayRows.map(r => colA1 + r + ':' + colEndA1 + r)).setBackground(HOLIDAY_COLOR);
+  }
+
+  if (timedOut) return code + ': 信用残を' + filled + '日分入力しました(時間切れのため途中まで。残りは自動更新で埋まります)';
   return code + ': 信用残を' + filled + '日分入力しました';
 }
 

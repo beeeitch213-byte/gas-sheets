@@ -160,12 +160,13 @@ function writeClosesToDatabaseBulk(code, dataMap) {
   range.setValues(values);
 }
 
-function backfillDatabaseForCode(code) {
+/** prefetched: 取得済みの日次チャート(DB_BACKFILL_YEARS年分。省略時はここで取得する) */
+function backfillDatabaseForCode(code, prefetched) {
   const today = new Date();
   const startDate = new Date(today);
   startDate.setFullYear(startDate.getFullYear() - DB_BACKFILL_YEARS);
 
-  const result = fetchHistoricalCloses(code, startDate, today);
+  const result = prefetched || fetchHistoricalCloses(code, startDate, today);
   const dataMap = result && result.dateMap;
   if (!dataMap || Object.keys(dataMap).length === 0) return false;
   writeClosesToDatabaseBulk(code, dataMap);
