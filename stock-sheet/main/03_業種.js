@@ -240,37 +240,3 @@ function runIndustryBulkFetch(codes) {
   }
   return message;
 }
-
-/**
- * 既存シートの2行目(銘柄3列結合=銘柄コード)を、1列目=コード単独セル+残り2列(結合)=業種情報、の
- * レイアウトに移行する。既に移行済みのシート/列はスキップされるので、再実行しても安全。
- */
-function migrateCodeCellsForIndustryLayout_(sheet) {
-  const lastCol = sheet.getLastColumn();
-  if (lastCol < STOCK_START_COL) return 0;
-  const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
-  let count = 0;
-  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
-    if (!codeRow[col - 1]) continue;
-    const fullRange = sheet.getRange(2, col, 1, STOCK_COL_WIDTH);
-    if (fullRange.isPartOfMerge()) {
-      const merged = fullRange.getMergedRanges()[0];
-      if (merged.getNumColumns() === STOCK_COL_WIDTH) {
-        fullRange.breakApart();
-        sheet.getRange(2, col + 1, 1, 2).merge();
-        count++;
-        continue;
-      }
-    }
-    const industryRange = sheet.getRange(2, col + 1, 1, 2);
-    if (!industryRange.isPartOfMerge()) industryRange.merge();
-  }
-  return count;
-}
-
-function migrateAllSheetsForIndustryLayout() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const targets = ss.getSheets().filter(s => s.getName() === TEMPLATE_SHEET_NAME || parseYearMonthFromSheetName(s.getName()));
-  const messages = targets.map(s => s.getName() + ': ' + migrateCodeCellsForIndustryLayout_(s) + '件移行');
-  return messages.join('\n');
-}
