@@ -676,10 +676,21 @@ function listJpxWeeksForYear(year) {
     }));
 }
 
-/** 時間主導トリガー用(引数なし): 本日が含まれる週(=直近週)を取得する。既に取得済みなら何もしない */
+// 自動更新で、公開済みかどうかを確認する期間(日数)。この期間に含まれる週のうち、シートに無い週を取得する
+const JPX_LATEST_LOOKBACK_DAYS = 28;
+
+/**
+ * 時間主導トリガー用(引数なし): JPXに公開済みの直近の週のうち、まだシートに無い週を取得する。
+ * 投資部門別売買状況は、翌週の第4営業日(木曜ごろ)に前の週の分が公表される。そのため「今日が含まれる週」を
+ * 取りにいくと毎回未公表でスキップされ、前の週の分も取りこぼしてしまう(2026年10月第1週で発生)。
+ * 直近JPX_LATEST_LOOKBACK_DAYS日に含まれる週をまとめて確認し、取得済みの週はスキップする。
+ */
 function updateJpxStatsForLatestWeek() {
-  const todayStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
-  const message = updateJpxStatsForDateRangeInput(todayStr, todayStr, false);
+  const today = new Date();
+  const from = new Date(today);
+  from.setDate(from.getDate() - JPX_LATEST_LOOKBACK_DAYS);
+  const fmt = d => Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy-MM-dd');
+  const message = updateJpxStatsForDateRangeInput(fmt(from), fmt(today), false);
   Logger.log(message);
   return message;
 }
