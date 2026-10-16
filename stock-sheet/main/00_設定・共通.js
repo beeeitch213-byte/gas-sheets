@@ -21,7 +21,7 @@
  *      updateMarketTradingValues   毎日17時台(商況プリント２(後場)16:10頃公表後)
  *      updateShortSellForToday     毎日18時台(空売り集計PDF 17:30頃公表後)
  *      updateMarginData            毎日19時台(日次信用残。直近分のドライブ保存も行う)
- *      updateJpxStatsForLatestWeek 毎週金曜20時台(投資部門別。前の週の分は木曜ごろ公表。直近4週間のうち未取得の週を埋める)
+ *      updateJpxStatsForLatestWeek 毎日16時台(投資部門別。前の週の分は毎週第4営業日15:30掲載。掲載済みの未取得週だけ取得し、それ以外の日は何もしない)
  */
 
 // ==== 設定項目 ====

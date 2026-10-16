@@ -679,18 +679,58 @@ function listJpxWeeksForYear(year) {
 // 自動更新で、公開済みかどうかを確認する期間(日数)。この期間に含まれる週のうち、シートに無い週を取得する
 const JPX_LATEST_LOOKBACK_DAYS = 28;
 
+// 週間売買状況の掲載時刻。JPXは毎週第4営業日(通常は木曜日。祝日などの非営業日があればその分後ろ倒し)の
+// 15:30に、前の週の資料を掲載する
+const JPX_PUBLISH_HOUR = 15;
+const JPX_PUBLISH_MINUTE = 30;
+
+/** 指定した週(weekMondayはその週の月曜日)の資料の掲載予定日時 = 次の週の第4営業日 15:30 */
+function jpxPublishTimeForWeek_(weekMonday) {
+  const d = new Date(weekMonday.getFullYear(), weekMonday.getMonth(), weekMonday.getDate() + 7);
+  let businessDays = 0;
+  for (let i = 0; i < 31; i++) { // 31日は無限ループ防止の上限(実際は数日で見つかる)
+    const dow = d.getDay();
+    if (dow !== 0 && dow !== 6 && !isJapaneseHoliday(d)) {
+      businessDays++;
+      if (businessDays === 4) break;
+    }
+    d.setDate(d.getDate() + 1);
+  }
+  d.setHours(JPX_PUBLISH_HOUR, JPX_PUBLISH_MINUTE, 0, 0);
+  return d;
+}
+
+/** nowの時点で掲載済みのはずの、いちばん新しい週の月曜日 */
+function latestPublishedJpxWeekMonday_(now) {
+  const thisMonday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - ((now.getDay() + 6) % 7));
+  const lastMonday = new Date(thisMonday.getFullYear(), thisMonday.getMonth(), thisMonday.getDate() - 7);
+  if (now >= jpxPublishTimeForWeek_(lastMonday)) return lastMonday; // 今週の第4営業日15:30を過ぎていれば先週分まで
+  return new Date(lastMonday.getFullYear(), lastMonday.getMonth(), lastMonday.getDate() - 7);
+}
+
 /**
- * 時間主導トリガー用(引数なし): JPXに公開済みの直近の週のうち、まだシートに無い週を取得する。
- * 投資部門別売買状況は、翌週の第4営業日(木曜ごろ)に前の週の分が公表される。そのため「今日が含まれる週」を
- * 取りにいくと毎回未公表でスキップされ、前の週の分も取りこぼしてしまう(2026年10月第1週で発生)。
- * 直近JPX_LATEST_LOOKBACK_DAYS日に含まれる週をまとめて確認し、取得済みの週はスキップする。
+ * 時間主導トリガー用(引数なし。毎日16時台に実行する想定): 掲載済みの週のうち、まだシートに無い週を取得する。
+ * 掲載済みのはずの最新週がすでにシートにあれば、JPXに問い合わせずに終わる(掲載日以外は何もしない)。
+ * 無ければ直近JPX_LATEST_LOOKBACK_DAYS日に含まれる週をまとめて確認し、取得済みの週はスキップする
+ * (掲載が予定より遅れた日や、前の週の取りこぼしもここで埋まる)。
  */
 function updateJpxStatsForLatestWeek() {
-  const today = new Date();
-  const from = new Date(today);
-  from.setDate(from.getDate() - JPX_LATEST_LOOKBACK_DAYS);
+  const now = new Date();
   const fmt = d => Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy-MM-dd');
-  const message = updateJpxStatsForDateRangeInput(fmt(from), fmt(today), false);
+  const expectedMonday = latestPublishedJpxWeekMonday_(now);
+  const expectedSunday = new Date(expectedMonday.getFullYear(), expectedMonday.getMonth(), expectedMonday.getDate() + 6);
+
+  // 週の開始日は月曜とは限らない(例: 2026/9/24〜9/25)ので、その週の範囲に開始日があるかで判定する
+  const sheet = getMainSpreadsheet().getSheetByName(JPX_STATS_SHEET_NAME);
+  if (sheet && listJpxBlocks_(sheet).some(b => b.startDate && b.startDate >= expectedMonday && b.startDate <= expectedSunday)) {
+    const message = '投資部門別: 掲載済みの最新週(' + fmt(expectedMonday) + 'の週)まで取得済みです';
+    Logger.log(message);
+    return message;
+  }
+
+  const from = new Date(now);
+  from.setDate(from.getDate() - JPX_LATEST_LOOKBACK_DAYS);
+  const message = updateJpxStatsForDateRangeInput(fmt(from), fmt(now), false);
   Logger.log(message);
   return message;
 }
