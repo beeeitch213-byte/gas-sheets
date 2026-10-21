@@ -7,6 +7,7 @@
  * ・週間累計 … 各週(月〜日)の最終営業日の下に「週間累計」行を入れる。
  *     月をまたぐ週は、最終営業日がある月のシートに入れ、前月分の日も合計する。
  *     メニュー「機能 → 修正 → 週間累計適用」で、開いている月次シートにも適用できる。
+ * ・I列の数式 … メニュー「機能 → 修正 → I列の数式を更新」で、開いている月次シートを今の数式に直す。
  * ・setupDailyTrigger    … トリガーを「毎日」に設定し直す(手動で1回だけ実行)
  * ・repairCarryOver      … 既存の月次シートの繰越損益を数式に直す(手動で1回だけ実行・任意)
  * ・onOpen               … メニュー登録、当月シートの本日の「実現損益」セルを選択
@@ -157,7 +158,7 @@ function buildMonthSheet_(sheet, year, month, isBiz) {
     } else {
       openRanges.push(`C${row}:J${row}`);
       hFormulas.push([`=E${row}-(F${row}+G${row})`]);
-      iFormulas.push([`=IF(OR(E${row}="", E${row}=0), 0, F${row}/E${row})`]);
+      iFormulas.push([iFormula_(row)]);
     }
   }
 
@@ -183,6 +184,58 @@ function buildMonthSheet_(sheet, year, month, isBiz) {
   sheet.getRange(`B${FIRST_ROW}:B${BASE_LAST_ROW}`).setValues(dayValues);
   sheet.getRange(`H${FIRST_ROW}:H${BASE_LAST_ROW}`).setFormulas(hFormulas);
   sheet.getRange(`I${FIRST_ROW}:I${BASE_LAST_ROW}`).setFormulas(iFormulas);
+}
+
+/** I列の数式。E−G が0(または E が空欄)なら0 */
+function iFormula_(row) {
+  return `=IF(OR(E${row}="", E${row}-G${row}=0), 0, F${row}/(E${row}-G${row}))`;
+}
+
+/**
+ * メニュー「機能 → 修正 → I列の数式を更新」
+ * 開いている月次シートの営業日の行のI列を、今の数式(iFormula_)に書き換える。
+ * 休場日・週間累計行・月合計行は触らない。
+ */
+function menuUpdateIFormulas() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const ui = SpreadsheetApp.getUi();
+  const sheet = ss.getActiveSheet();
+  const ym = parseSheetName_(sheet.getName());
+
+  if (!ym) {
+    ui.alert('月次シート(例: 10月26年)を開いてから実行してください。');
+    return;
+  }
+
+  const res = ui.alert(
+    'I列の数式を更新',
+    '「' + sheet.getName() + '」の営業日の行のI列を、新しい数式に書き換えます。よろしいですか?',
+    ui.ButtonSet.OK_CANCEL
+  );
+  if (res !== ui.Button.OK) return;
+
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(30000)) {
+    ui.alert('他の処理が実行中です。少し待ってから実行してください。');
+    return;
+  }
+  let count = 0;
+  try {
+    const lastDay = new Date(ym.year, ym.month, 0).getDate();
+    const values = sheet.getRange(FIRST_ROW, 1, SCAN_ROWS, 3).getValues(); // A〜C列
+    values.forEach((v, i) => {
+      const day = v[0];
+      // A列が日付(数値)で休場でない行だけ。週間累計行は A列が文字なので対象外
+      if (typeof day !== 'number' || day < 1 || day > lastDay || v[2] === CLOSED_LABEL) return;
+      const row = FIRST_ROW + i;
+      sheet.getRange(`I${row}`).setFormula(iFormula_(row));
+      count++;
+    });
+    SpreadsheetApp.flush();
+  } finally {
+    lock.releaseLock();
+  }
+  ui.alert('「' + sheet.getName() + '」のI列を ' + count + ' 行更新しました。');
 }
 
 // ============================================================
@@ -507,6 +560,7 @@ function onOpen() {
     .addSubMenu(
       ui.createMenu('修正')
         .addItem('週間累計適用', 'menuApplyWeeklyRows')
+        .addItem('I列の数式を更新', 'menuUpdateIFormulas')
     )
     .addToUi();
 
