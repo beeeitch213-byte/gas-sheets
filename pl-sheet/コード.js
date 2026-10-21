@@ -9,6 +9,7 @@
  *     メニュー「機能 → 修正 → 週間累計適用」で、開いている月次シートにも適用できる。
  * ・setupDailyTrigger    … トリガーを「毎日」に設定し直す(手動で1回だけ実行)
  * ・repairCarryOver      … 既存の月次シートの繰越損益を数式に直す(手動で1回だけ実行・任意)
+ * ・repairIColumn        … 既存の月次シートのI列を新しい数式に直す(手動で1回だけ実行・任意)
  * ・onOpen               … メニュー登録、当月シートの本日の「実現損益」セルを選択
  */
 
@@ -157,7 +158,7 @@ function buildMonthSheet_(sheet, year, month, isBiz) {
     } else {
       openRanges.push(`C${row}:J${row}`);
       hFormulas.push([`=E${row}-(F${row}+G${row})`]);
-      iFormulas.push([`=IF(OR(E${row}="", E${row}=0), 0, F${row}/E${row})`]);
+      iFormulas.push([iFormula_(row)]);
     }
   }
 
@@ -183,6 +184,11 @@ function buildMonthSheet_(sheet, year, month, isBiz) {
   sheet.getRange(`B${FIRST_ROW}:B${BASE_LAST_ROW}`).setValues(dayValues);
   sheet.getRange(`H${FIRST_ROW}:H${BASE_LAST_ROW}`).setFormulas(hFormulas);
   sheet.getRange(`I${FIRST_ROW}:I${BASE_LAST_ROW}`).setFormulas(iFormulas);
+}
+
+/** I列の数式: F / (E - G)。E が空欄、または E - G が 0 なら 0 */
+function iFormula_(row) {
+  return `=IF(OR(E${row}="", E${row}-G${row}=0), 0, F${row}/(E${row}-G${row}))`;
 }
 
 // ============================================================
@@ -491,6 +497,31 @@ function repairCarryOver() {
   });
 
   console.log('繰越損益を修正しました: ' + monthSheets.map(x => x.sheet.getName()).join(' → '));
+}
+
+/**
+ * 既存の月次シートのI列を新しい数式(iFormula_)に直す(任意)
+ * 旧数式 =IF(OR(E="", E=0), 0, F/E) が入っているセルだけを書き換える
+ */
+function repairIColumn() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const oldPattern = /^=IF\(OR\(E(\d+)="",\s*E\1=0\),\s*0,\s*F\1\/E\1\)$/;
+  const fixed = [];
+
+  ss.getSheets().forEach(sh => {
+    if (!parseSheetName_(sh.getName())) return;
+    const formulas = sh.getRange(FIRST_ROW, 9, SCAN_ROWS, 1).getFormulas();
+    let count = 0;
+    formulas.forEach((f, i) => {
+      if (!oldPattern.test(f[0])) return;
+      const row = FIRST_ROW + i;
+      sh.getRange(`I${row}`).setFormula(iFormula_(row));
+      count++;
+    });
+    if (count) fixed.push(sh.getName() + '(' + count + ')');
+  });
+
+  console.log('I列の数式を修正しました: ' + (fixed.join(', ') || 'なし'));
 }
 
 // ============================================================
