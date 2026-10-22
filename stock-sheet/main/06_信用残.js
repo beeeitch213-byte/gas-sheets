@@ -809,6 +809,40 @@ function marginCellValues_(pair, isMarket) {
 
 function isMarginBlank_(v) { return v === '' || v === null || v === undefined; }
 
+const MARGIN_RATIO_FORMAT = '#,##0.00'; // 信用倍率の表示形式(小数点以下2桁)
+
+/**
+ * 信用倍率の列(39〜69行目)の表示形式と条件付き書式(1以上=ratioHighColor、1未満=ratioLowColor)を整える。
+ * 日次の更新では信用倍率の書式を設定しておらず、シートに元からある書式に頼っていたため、書式が抜けた行
+ * (2026年10月の15日以降など)は小数点以下が揃わず、色も付かなかった。書き込みのたびにここで補う。
+ * 条件付き書式は、39〜69行目全体にかかるルールが無い列にだけ追加する(既存のルールは消さない)。
+ * ratioCols: 信用倍率の列番号の配列。
+ */
+function ensureMarginRatioFormats_(sheet, ratioCols) {
+  if (ratioCols.length === 0) return;
+  const lastRow = MARGIN_FIRST_ROW + 30;
+  sheet.getRangeList(ratioCols.map(c => columnToLetter(c) + MARGIN_FIRST_ROW + ':' + columnToLetter(c) + lastRow))
+    .setNumberFormat(MARGIN_RATIO_FORMAT);
+
+  const rules = sheet.getConditionalFormatRules();
+  const covered = {};
+  rules.forEach(rule => rule.getRanges().forEach(rg => {
+    if (rg.getRow() <= MARGIN_FIRST_ROW && rg.getLastRow() >= lastRow) {
+      for (let c = rg.getColumn(); c <= rg.getLastColumn(); c++) covered[c] = true;
+    }
+  }));
+  const missing = ratioCols.filter(c => !covered[c]);
+  if (missing.length === 0) return;
+
+  const colors = getColorSettings();
+  missing.forEach(c => {
+    const range = sheet.getRange(columnToLetter(c) + MARGIN_FIRST_ROW + ':' + columnToLetter(c) + lastRow);
+    rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(1).setFontColor(colors.ratioHighColor).setRanges([range]).build());
+    rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThan(1).setFontColor(colors.ratioLowColor).setRanges([range]).build());
+  });
+  sheet.setConditionalFormatRules(rules);
+}
+
 /**
  * 指定日の信用残を当月(その日の月)シートの信用残行に書き込む。
  * onlyCode を指定すると、その銘柄の列だけを埋める(新規銘柄追加時の補完用)。
@@ -876,6 +910,7 @@ function updateMarginForSpecificDate(targetDate, onlyCode) {
   });
   sheet.getRange(row, 1, 1, lastCol).setValues([rowValues]);
   sheet.getRange(row, 1, 1, lastCol).setNumberFormats([formats]);
+  ensureMarginRatioFormats_(sheet, blocks.map(b => b.col + 2));
 
   let message = dateStr + ': ' + written + '/' + blocks.length + '項目の信用残を更新しました';
   if (notFound.length > 0) message += ' / 一覧になかった項目(信用取引の対象外など): ' + notFound.join(', ');
@@ -1023,6 +1058,7 @@ function fillMarginForCode(code, knownCol) {
   abRange.setValues(ab);
   blockRange.setValues(block);
   blockRange.setNumberFormats(formats);
+  ensureMarginRatioFormats_(sheet, [targetCol + 2]);
   if (holidayRows.length > 0) {
     const colA1 = columnToLetter(targetCol), colEndA1 = columnToLetter(targetCol + STOCK_COL_WIDTH - 1);
     sheet.getRangeList(holidayRows.map(r => colA1 + r + ':' + colEndA1 + r)).setBackground(HOLIDAY_COLOR);
