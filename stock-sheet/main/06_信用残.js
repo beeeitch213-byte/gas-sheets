@@ -815,24 +815,50 @@ const MARGIN_RATIO_FORMAT = '#,##0.00'; // 信用倍率の表示形式(小数点
  * 信用倍率の列(39〜69行目)の表示形式と条件付き書式(1以上=ratioHighColor、1未満=ratioLowColor)を整える。
  * 日次の更新では信用倍率の書式を設定しておらず、シートに元からある書式に頼っていたため、書式が抜けた行
  * (2026年10月の15日以降など)は小数点以下が揃わず、色も付かなかった。書き込みのたびにここで補う。
- * 条件付き書式は、39〜69行目全体にかかるルールが無い列にだけ追加する(既存のルールは消さない)。
+ * 条件付き書式:
+ *  ・信用倍率の列で、信用残の行の途中までしかかかっていないルール(例: E39:E54)は、範囲を39〜69行目に伸ばす
+ *  ・それでも39〜69行目全体にかかるルールが無い列にだけ、ルールを追加する
+ *  (それ以外の既存のルールは変えない)
  * ratioCols: 信用倍率の列番号の配列。
  */
 function ensureMarginRatioFormats_(sheet, ratioCols) {
   if (ratioCols.length === 0) return;
   const lastRow = MARGIN_FIRST_ROW + 30;
-  sheet.getRangeList(ratioCols.map(c => columnToLetter(c) + MARGIN_FIRST_ROW + ':' + columnToLetter(c) + lastRow))
-    .setNumberFormat(MARGIN_RATIO_FORMAT);
+  const fullA1 = c => columnToLetter(c) + MARGIN_FIRST_ROW + ':' + columnToLetter(c) + lastRow;
+  sheet.getRangeList(ratioCols.map(fullA1)).setNumberFormat(MARGIN_RATIO_FORMAT);
 
-  const rules = sheet.getConditionalFormatRules();
+  const isRatioCol = {};
+  ratioCols.forEach(c => { isRatioCol[c] = true; });
+  // 信用倍率の1列だけにかかり、信用残の行(39〜69行目)の中にあるが全体を覆っていない範囲 = 途中で切れている範囲
+  const isPartialRatioRange = rg => rg.getColumn() === rg.getLastColumn() && isRatioCol[rg.getColumn()] &&
+    rg.getRow() >= MARGIN_FIRST_ROW && rg.getLastRow() <= lastRow &&
+    (rg.getRow() > MARGIN_FIRST_ROW || rg.getLastRow() < lastRow);
+
+  let changed = false;
   const covered = {};
-  rules.forEach(rule => rule.getRanges().forEach(rg => {
-    if (rg.getRow() <= MARGIN_FIRST_ROW && rg.getLastRow() >= lastRow) {
-      for (let c = rg.getColumn(); c <= rg.getLastColumn(); c++) covered[c] = true;
-    }
-  }));
+  const rules = sheet.getConditionalFormatRules().map(rule => {
+    const ranges = rule.getRanges();
+    let extended = false;
+    const newRanges = ranges.map(rg => {
+      if (!isPartialRatioRange(rg)) return rg;
+      extended = true;
+      return sheet.getRange(fullA1(rg.getColumn()));
+    });
+    newRanges.forEach(rg => {
+      if (rg.getRow() <= MARGIN_FIRST_ROW && rg.getLastRow() >= lastRow) {
+        for (let c = rg.getColumn(); c <= rg.getLastColumn(); c++) covered[c] = true;
+      }
+    });
+    if (!extended) return rule;
+    changed = true;
+    return rule.copy().setRanges(newRanges).build();
+  });
+
   const missing = ratioCols.filter(c => !covered[c]);
-  if (missing.length === 0) return;
+  if (missing.length === 0) {
+    if (changed) sheet.setConditionalFormatRules(rules);
+    return;
+  }
 
   const colors = getColorSettings();
   missing.forEach(c => {
