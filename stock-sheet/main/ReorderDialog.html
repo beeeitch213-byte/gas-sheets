@@ -78,10 +78,16 @@
       // ブラウザ標準の自動スクロールはリストの端のごく狭い範囲でしか反応しないため、自前で行う。
       // リストの上端・下端から AUTO_SCROLL_ZONE px 以内にカーソルがあると、端に近いほど速くスクロールする。
       // リストの外(上の説明文や下のボタンのあたり)まで出たときは最高速でスクロールする。
-      const AUTO_SCROLL_ZONE = 90;      // 反応する範囲(px)
-      const AUTO_SCROLL_MAX_SPEED = 18; // 1フレームあたりの最大スクロール量(px)
+      // 同じ向きにスクロールし続けると、AUTO_SCROLL_BOOST_MS かけて最大 AUTO_SCROLL_BOOST_MAX 倍まで加速する
+      // (少しだけ動かしたいときはゆっくり、遠くまで運ぶときは速くなる)。
+      const AUTO_SCROLL_ZONE = 90;        // 反応する範囲(px)
+      const AUTO_SCROLL_MAX_SPEED = 32;   // 1フレームあたりの最大スクロール量(px、加速前)
+      const AUTO_SCROLL_BOOST_MAX = 2;    // 押し当て続けたときの最大倍率
+      const AUTO_SCROLL_BOOST_MS = 800;   // 最大倍率に達するまでの時間(ミリ秒)
       let dragPointerY = null;
       let autoScrollFrame = null;
+      let scrollingSince = null; // 今の向きでスクロールし始めた時刻(止まったら null)
+      let scrollingDir = 0;
 
       function autoScrollStep() {
         const list = document.getElementById('sortList');
@@ -93,7 +99,16 @@
           } else if (dragPointerY > rect.bottom - AUTO_SCROLL_ZONE) {
             speed = Math.min(1, (dragPointerY - (rect.bottom - AUTO_SCROLL_ZONE)) / AUTO_SCROLL_ZONE);
           }
-          if (speed !== 0) list.scrollTop += Math.round(speed * AUTO_SCROLL_MAX_SPEED) || Math.sign(speed);
+          const dir = Math.sign(speed);
+          if (dir === 0 || dir !== scrollingDir) {
+            scrollingSince = dir === 0 ? null : performance.now();
+            scrollingDir = dir;
+          }
+          if (dir !== 0) {
+            const held = Math.min(1, (performance.now() - scrollingSince) / AUTO_SCROLL_BOOST_MS);
+            const boost = 1 + (AUTO_SCROLL_BOOST_MAX - 1) * held;
+            list.scrollTop += Math.round(speed * AUTO_SCROLL_MAX_SPEED * boost) || dir;
+          }
         }
         autoScrollFrame = requestAnimationFrame(autoScrollStep);
       }
@@ -106,6 +121,8 @@
         if (autoScrollFrame !== null) cancelAnimationFrame(autoScrollFrame);
         autoScrollFrame = null;
         dragPointerY = null;
+        scrollingSince = null;
+        scrollingDir = 0;
       }
 
       // dragoverはカーソルの下の要素から伝わってくるので、リストの外にいるときの位置もここで拾える
