@@ -363,18 +363,6 @@ function addStockColumnToSheet(sheet, code, name, industry) {
 }
 
 // ==== 銘柄削除機能 ====
-function getStockNameFromSheet(sheet, code) {
-  if (!sheet) return null;
-  const lastCol = sheet.getLastColumn();
-  if (lastCol < 3) return null;
-  const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
-  const nameRow = sheet.getRange(3, 1, 1, lastCol).getValues()[0];
-  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
-    if (String(codeRow[col - 1]) === String(code)) return String(nameRow[col - 1]);
-  }
-  return null;
-}
-
 function deleteStockColumnFromSheet(sheet, code) {
   if (!sheet) return false;
   const lastCol = sheet.getLastColumn();
@@ -420,32 +408,15 @@ function deleteStock(code) {
   return '銘柄コード ' + code + ' の削除結果 → ' + results.join(' / ');
 }
 
+/** 「機能 → 銘柄を削除」: 登録銘柄を検索・チェックして選び、まとめて削除するダイアログ(DeleteStockDialog) */
 function deleteStockUI() {
-  const ui = SpreadsheetApp.getUi();
-  const codeResp = ui.prompt('銘柄を削除', '削除する銘柄コードを入力してください(例: 7203)', ui.ButtonSet.OK_CANCEL);
-  if (codeResp.getSelectedButton() !== ui.Button.OK) return;
+  SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutputFromFile('DeleteStockDialog').setWidth(480).setHeight(600), '銘柄を削除');
+}
 
-  const code = codeResp.getResponseText().trim();
-  if (!code) { ui.alert('銘柄コードが入力されていません'); return; }
-
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-  const name = getStockNameFromSheet(getTargetSheet(new Date()), code)
-    || getStockNameFromSheet(ss.getSheetByName(TEMPLATE_SHEET_NAME), code)
-    || '';
-
-  const confirmResp = ui.alert(
-    '削除の確認',
-    '銘柄コード ' + code + (name ? '(' + name + ')' : '') + ' を、当月シート・テンプレート・データベースシートから削除します。\n'
-    + 'データベースシートに蓄積された過去の終値データも失われます。元に戻せません。よろしいですか?',
-    ui.ButtonSet.YES_NO
-  );
-  if (confirmResp !== ui.Button.YES) return;
-
-  try {
-    ui.alert(withStockColumnLock_('銘柄を削除', () => deleteStock(code)));
-  } catch (e) {
-    ui.alert(e.message);
-  }
+/** DeleteStockDialogの「削除する」から呼ばれる。選んだ銘柄を順に削除し、結果をまとめて返す */
+function deleteStocksFromDialog(codes) {
+  if (!codes || codes.length === 0) throw new Error('削除する銘柄が選ばれていません');
+  return withStockColumnLock_('銘柄を削除', () => codes.map(code => deleteStock(String(code))).join('\n'));
 }
 
 function normalizeBufferColumns(sheet) {
