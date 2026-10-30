@@ -1,0 +1,245 @@
+<!DOCTYPE html>
+<html>
+  <head>
+    <base target="_top">
+    <style>
+      /* ダイアログの枠に収まるよう、高さ・幅を画面に合わせ、リストだけをスクロールさせる */
+      html, body {
+        height: 100%;
+      }
+      body {
+        font-family: Arial, sans-serif;
+        margin: 0;
+        padding: 10px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+      }
+      .view {
+        flex: 1;
+        min-height: 0;
+        display: flex;
+        flex-direction: column;
+      }
+      .hidden {
+        display: none;
+      }
+      #searchBox {
+        width: 100%;
+        padding: 6px;
+        box-sizing: border-box;
+        font-size: 14px;
+        margin-bottom: 6px;
+      }
+      .list {
+        list-style: none;
+        margin: 0;
+        padding: 0;
+        flex: 1;
+        min-height: 0;
+        overflow-y: auto;
+        border: 1px solid #ddd;
+        border-radius: 4px;
+      }
+      .list li {
+        padding: 7px 10px;
+        border-bottom: 1px solid #eee;
+        font-size: 13px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      .list li:last-child {
+        border-bottom: none;
+      }
+      #stockList li {
+        cursor: pointer;
+      }
+      #stockList li.checked {
+        background: #fce8e6;
+      }
+      .empty {
+        color: #999;
+        font-size: 12px;
+        padding: 12px 8px;
+        justify-content: center;
+      }
+      .warning {
+        font-size: 13px;
+        color: #d32f2f;
+        line-height: 1.6;
+        margin-bottom: 8px;
+      }
+      .buttons {
+        margin-top: 12px;
+        display: flex;
+        align-items: center;
+        gap: 8px;
+      }
+      #statusMsg {
+        font-size: 12px;
+        flex-grow: 1;
+        white-space: pre-line; /* 複数銘柄の削除結果は1銘柄1行で出す */
+      }
+      button.main {
+        padding: 6px 16px;
+        font-size: 13px;
+        white-space: nowrap;
+        flex-shrink: 0;
+      }
+      button.danger {
+        background: #d32f2f;
+        color: #fff;
+        border: 1px solid #b71c1c;
+        border-radius: 3px;
+      }
+      button.danger:disabled {
+        background: #e6a1a1;
+        border-color: #e6a1a1;
+      }
+    </style>
+  </head>
+  <body>
+    <!-- 選ぶ画面 -->
+    <div id="selectView" class="view">
+      <input type="text" id="searchBox" placeholder="銘柄コード(例: 7203)または銘柄名で絞り込み">
+      <ul id="stockList" class="list"><li class="empty">読み込み中…</li></ul>
+    </div>
+
+    <!-- 確認画面 -->
+    <div id="confirmView" class="view hidden">
+      <div class="warning">
+        次の銘柄を、当月シート・テンプレート・データベースシートから削除します。<br>
+        データベースシートに蓄積された過去の終値データも失われます。元に戻せません。
+      </div>
+      <ul id="confirmList" class="list"></ul>
+    </div>
+
+    <div class="buttons">
+      <div id="statusMsg"></div>
+      <button class="main" id="closeBtn" onclick="google.script.host.close()">閉じる</button>
+      <button class="main hidden" id="backBtn" onclick="showSelectView()">戻る</button>
+      <button class="main danger" id="nextBtn" onclick="showConfirmView()" disabled>削除…</button>
+      <button class="main danger hidden" id="deleteBtn" onclick="deleteSelected()">削除する</button>
+    </div>
+
+    <script>
+      let stocks = [];        // 登録銘柄 [{code, name}](当月シートの並び順)
+      let selectedCodes = []; // チェックした銘柄コード
+
+      window.addEventListener('load', loadStocks);
+      document.getElementById('searchBox').addEventListener('input', renderStockList);
+
+      function loadStocks() {
+        google.script.run
+          .withSuccessHandler(function(items) {
+            stocks = items;
+            // 削除済みなどでいなくなった銘柄は選択から外す
+            selectedCodes = selectedCodes.filter(function(code) { return stocks.some(function(s) { return s.code === code; }); });
+            renderStockList();
+          })
+          .withFailureHandler(function(err) {
+            document.getElementById('stockList').innerHTML = '';
+            setStatus('読み込みに失敗しました: ' + err.message, '#d32f2f');
+          })
+          .getCurrentStockOrder();
+      }
+
+      function setStatus(text, color) {
+        const el = document.getElementById('statusMsg');
+        el.style.color = color || '#333';
+        el.textContent = text;
+      }
+
+      function label(code) {
+        const s = stocks.find(function(x) { return x.code === code; });
+        return code + (s && s.name ? '(' + s.name + ')' : '');
+      }
+
+      function toggle(code) {
+        const i = selectedCodes.indexOf(code);
+        if (i === -1) selectedCodes.push(code);
+        else selectedCodes.splice(i, 1);
+        renderStockList();
+      }
+
+      /** 検索窓の文字で、コードの先頭一致・銘柄名の部分一致で絞り込む */
+      function renderStockList() {
+        const list = document.getElementById('stockList');
+        const scrollTop = list.scrollTop;
+        const q = document.getElementById('searchBox').value.trim().toUpperCase();
+        const shown = stocks.filter(function(s) {
+          return !q || s.code.toUpperCase().indexOf(q) === 0 || s.name.toUpperCase().indexOf(q) !== -1;
+        });
+        list.innerHTML = '';
+        if (shown.length === 0) {
+          list.innerHTML = '<li class="empty">' + (stocks.length === 0 ? '登録銘柄がありません' : '見つかりません') + '</li>';
+        }
+        shown.forEach(function(s) {
+          const li = document.createElement('li');
+          const checked = selectedCodes.indexOf(s.code) !== -1;
+          if (checked) li.className = 'checked';
+          const box = document.createElement('input');
+          box.type = 'checkbox';
+          box.checked = checked;
+          box.addEventListener('click', function(e) { e.stopPropagation(); toggle(s.code); });
+          li.appendChild(box);
+          li.appendChild(document.createTextNode(label(s.code)));
+          li.addEventListener('click', function() { toggle(s.code); }); // 行のどこを押しても切り替える
+          list.appendChild(li);
+        });
+        list.scrollTop = scrollTop;
+        const btn = document.getElementById('nextBtn');
+        btn.disabled = selectedCodes.length === 0;
+        btn.textContent = selectedCodes.length > 0 ? '削除…(' + selectedCodes.length + '銘柄)' : '削除…';
+      }
+
+      function setView(confirm) {
+        document.getElementById('selectView').classList.toggle('hidden', confirm);
+        document.getElementById('confirmView').classList.toggle('hidden', !confirm);
+        document.getElementById('nextBtn').classList.toggle('hidden', confirm);
+        document.getElementById('backBtn').classList.toggle('hidden', !confirm);
+        document.getElementById('deleteBtn').classList.toggle('hidden', !confirm);
+      }
+
+      function showSelectView() {
+        setView(false);
+        setStatus('');
+      }
+
+      /** 「削除…」: 選んだ銘柄を並べて、本当に削除するか確かめる */
+      function showConfirmView() {
+        const list = document.getElementById('confirmList');
+        list.innerHTML = '';
+        selectedCodes.forEach(function(code) {
+          const li = document.createElement('li');
+          li.textContent = label(code);
+          list.appendChild(li);
+        });
+        setStatus(selectedCodes.length + '銘柄を削除します', '#d32f2f');
+        setView(true);
+      }
+
+      function deleteSelected() {
+        const buttons = ['deleteBtn', 'backBtn', 'closeBtn'].map(function(id) { return document.getElementById(id); });
+        buttons.forEach(function(b) { b.disabled = true; });
+        setStatus('削除中…');
+        google.script.run
+          .withSuccessHandler(function(message) {
+            buttons.forEach(function(b) { b.disabled = false; });
+            selectedCodes = [];
+            showSelectView();
+            setStatus(message, '#188038');
+            loadStocks();
+          })
+          .withFailureHandler(function(err) {
+            buttons.forEach(function(b) { b.disabled = false; });
+            setStatus('削除に失敗しました: ' + err.message, '#d32f2f');
+            loadStocks(); // 途中まで削除できた銘柄があれば一覧から消す
+          })
+          .deleteStocksFromDialog(selectedCodes.slice());
+      }
+    </script>
+  </body>
+</html>
