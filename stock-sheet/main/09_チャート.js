@@ -363,6 +363,7 @@ function buildStockChartBundle_(code, periodDays) {
   // 業種売買代金合計+業種の空売り売買代金合計(同じ軸)。
   // 軸の下端を0にして、空売りの線の高さが「売買代金合計を100としたときの空売り比率」と同じ大きさになるようにする
   // (例: 空売り比率40%の日は、空売りの線が売買代金合計の線の4割の高さに来る)。
+  // 空売りの線は、目盛りの大きさを売買代金合計の軸と共有する別の軸に載せ、帯の下半分にだけ補助線と目盛り(右側)を足す。
   // 当月シートに業種が無いときだけ、テンプレートも含めて探し直す
   const industryLabel = stockRaw.industryLabel || getStockIndustryLabel_(code);
   const series = industryLabel ? buildIndustryShortSellSeriesByLabel(industryLabel) : null;
@@ -381,11 +382,15 @@ function buildStockChartBundle_(code, periodDays) {
     seriesDefs.push({ axisIndex: industryAxis, key: 'industryValue', maKey: 'industryMa', changeKey: 'industryChange', rateKey: 'industryRate',
       color: '#4fc3f7', maColor: '#ff9800', label: '業種(' + industryLabel + ')売買代金合計', unit: '百万円' });
 
+    axes.push({ band: [0.37, 0.64], color: '#202124', position: 'innerRight', format: '#,##0',
+      shareScaleWith: industryAxis, tickRange: [0, 0.5] });
+    const shortAxis = axes.length - 1;
+
     const shortPoints = series.points
       .filter(p => typeof p.shortAmountSum === 'number')
       .map(p => ({ date: new Date(p.date), value: p.shortAmountSum, ratioInfo: p.ratioSum }));
     specs.push({ points: shortPoints, prefix: 'short', rateDecimals: 2 });
-    seriesDefs.push({ axisIndex: industryAxis, key: 'shortValue', maKey: 'shortMa', changeKey: 'shortChange', rateKey: 'shortRate', ratioKey: 'shortRatioInfo',
+    seriesDefs.push({ axisIndex: shortAxis, key: 'shortValue', maKey: 'shortMa', changeKey: 'shortChange', rateKey: 'shortRate', ratioKey: 'shortRatioInfo',
       color: '#202124', maColor: '#9e9e9e', label: '業種(' + industryLabel + ')空売り(あり+なし)売買代金合計', unit: '百万円' });
   }
 
