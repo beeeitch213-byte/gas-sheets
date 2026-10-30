@@ -310,7 +310,8 @@
        * 「再読み込み」: 当月シートの最新の銘柄一覧を読み直す(サイドバーの銘柄追加で増えた銘柄を反映する)。
        * ここまでに並べ替えた順番は残し、新しく増えた銘柄は末尾に足す。シートから消えた銘柄はリストからも消す。
        */
-      function reloadList() {
+      // quiet: trueなら、銘柄の増減が無かったときは何も表示しない(ダイアログに戻ったときの自動読み直し用)
+      function reloadList(quiet) {
         const btn = document.getElementById('reloadBtn');
         const statusMsg = document.getElementById('statusMsg');
         btn.disabled = true;
@@ -330,6 +331,7 @@
             searchHits = findStocks(document.getElementById('searchBox').value);
             searchIndex = 0;
             if (searchHits.length > 0) showSearchHit();
+            if (quiet === true && added.length === 0 && removedCount === 0) return;
             statusMsg.style.display = 'block';
             statusMsg.style.color = '#333';
             statusMsg.textContent = '銘柄一覧を読み込みました' +
@@ -339,12 +341,25 @@
           })
           .withFailureHandler(function(err) {
             btn.disabled = false;
+            if (quiet === true) return;
             statusMsg.style.display = 'block';
             statusMsg.style.color = '#d32f2f';
             statusMsg.textContent = '読み込みに失敗しました: ' + err.message;
           })
           .getCurrentStockOrder();
       }
+
+      // サイドバーの銘柄追加から並び替えダイアログに戻ってきた(クリックした)ときに、銘柄一覧を自動で読み直す。
+      // ドラッグ中・適用中・直前に読み直したばかりのときは読み直さない。
+      const AUTO_RELOAD_INTERVAL_MS = 3000;
+      let lastAutoReload = 0;
+      window.addEventListener('focus', function() {
+        if (draggingEl || document.getElementById('applyBtn').disabled || document.getElementById('reloadBtn').disabled) return;
+        if (!document.querySelector('#sortList li')) return; // 初回の読み込み前
+        if (Date.now() - lastAutoReload < AUTO_RELOAD_INTERVAL_MS) return;
+        lastAutoReload = Date.now();
+        reloadList(true);
+      });
 
       function applyOrder() {
         const items = document.querySelectorAll('#sortList li');
