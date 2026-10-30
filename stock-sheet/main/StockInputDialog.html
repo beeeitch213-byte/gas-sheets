@@ -110,40 +110,56 @@
       const queue = [];
       let isProcessing = false;
 
+      // 登録済みの銘柄 {銘柄コード(大文字): 銘柄名}。ダイアログを開いたときに当月シートから一度だけ読み込み、
+      // 銘柄コードを4桁入力した瞬間に、サーバーに問い合わせずに重複を判定する。
+      // 読み込みが終わる前に4桁入力された場合だけ、これまでどおりサーバーに問い合わせる。
+      let registeredStocks = null;
+      const CODE_LENGTH = 4; // 銘柄コードの桁数(例: 7203、285A)
+
       window.addEventListener('load', function() {
         document.getElementById('code').focus();
+        google.script.run
+          .withSuccessHandler(function(items) {
+            registeredStocks = {};
+            items.forEach(function(item) { registeredStocks[String(item.code).toUpperCase()] = item.name; });
+            checkDuplicate(); // 読み込み中に入力済みなら、ここで判定する
+          })
+          .withFailureHandler(function() {}) // 読み込めなければ、入力時にサーバーへ問い合わせる
+          .getCurrentStockOrder();
       });
 
-      // 銘柄コード欄への入力のたびに、重複していないか確認する
-      let checkTimer = null;
-      document.getElementById('code').addEventListener('input', function() {
-        const code = this.value.trim();
+      function showDupMsg(text) {
         const dupMsg = document.getElementById('dupMsg');
+        dupMsg.textContent = text || '';
+        dupMsg.style.display = text ? 'block' : 'none';
+      }
 
-        clearTimeout(checkTimer);
+      /** 銘柄コード欄の内容が4桁なら、登録済み・追加キューにあるかを判定して表示する */
+      function checkDuplicate() {
+        const code = document.getElementById('code').value.trim().toUpperCase();
+        if (code.length !== CODE_LENGTH) { showDupMsg(''); return; }
 
-        if (!code) {
-          dupMsg.style.display = 'none';
+        const inQueue = queue.find(function(item) { return item.code.toUpperCase() === code && item.status !== 'error'; });
+        if (inQueue) {
+          showDupMsg(inQueue.status === 'done' ? 'このダイアログで追加済みです(' + inQueue.name + ')' : '追加キューに入っています(' + inQueue.name + ')');
           return;
         }
+        if (registeredStocks) {
+          showDupMsg(registeredStocks[code] !== undefined ? 'すでに登録されています(' + registeredStocks[code] + ')' : '');
+          return;
+        }
+        google.script.run
+          .withSuccessHandler(function(result) {
+            // 問い合わせ中に入力が変わっていたら、古い結果は表示しない
+            if (document.getElementById('code').value.trim().toUpperCase() !== code) return;
+            showDupMsg(result.exists ? 'すでに登録されています(' + result.name + ')' : '');
+          })
+          .withFailureHandler(function() { showDupMsg(''); }) // 確認自体が失敗しても、入力の邪魔をしない
+          .checkStockCodeExists(code);
+      }
 
-        // 入力が止まって0.5秒経ってから問い合わせる(打つたびに毎回問い合わせない)
-        checkTimer = setTimeout(function() {
-          google.script.run
-            .withSuccessHandler(function(result) {
-              if (result.exists) {
-                dupMsg.textContent = 'すでに登録されています(' + result.name + ')';
-                dupMsg.style.display = 'block';
-              } else {
-                dupMsg.style.display = 'none';
-              }
-            })
-            .withFailureHandler(function() {
-              dupMsg.style.display = 'none'; // 確認自体が失敗しても、入力の邪魔をしない
-            })
-            .checkStockCodeExists(code);
-        }, 500);
-      });
+      // 銘柄コード欄への入力のたびに判定する(4桁になった瞬間に結果が出る)
+      document.getElementById('code').addEventListener('input', checkDuplicate);
 
       function submitForm() {
         const codeInput = document.getElementById('code');
@@ -167,6 +183,7 @@
         // 入力欄をクリアして、すぐ次の入力ができるようにする
         codeInput.value = '';
         nameInput.value = '';
+        showDupMsg(''); // 入力欄を空にしたので、前の銘柄の重複メッセージも消す
         codeInput.focus();
 
         // まだ処理中でなければ、キューの処理を開始する
@@ -198,6 +215,7 @@
           .withSuccessHandler(function(message) {
             next.status = 'done';
             next.message = message;
+            if (registeredStocks) registeredStocks[next.code.toUpperCase()] = next.name;
             isProcessing = false;
             renderQueue();
             processQueue(); // 次の待機中の銘柄を処理
