@@ -610,6 +610,13 @@ function createNextMonthSheetIfNeeded(currentYear, currentMonth, startMs) {
   let nextMonth = currentMonth + 1;
   if (nextMonth > 12) { nextMonth = 1; nextYear += 1; }
   Logger.log(createMonthSheet_(nextYear, nextMonth, startMs));
+
+  // 月末が近づいたら、次月分も含めた決算予定を毎日作り直す(JPXの一覧は会社が発表日を決めるたびに更新されるため)
+  try {
+    Logger.log(updateKessanSchedule());
+  } catch (e) {
+    Logger.log('決算予定の更新に失敗しました: ' + e);
+  }
 }
 
 /**

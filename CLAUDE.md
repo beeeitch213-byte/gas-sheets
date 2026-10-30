@@ -27,6 +27,7 @@ Apps Script エディタ上でこの番号順に並べる(`00` が先頭でな�
 - `07_空売り集計.js` — 空売り集計シート
 - `08_投資部門別.js` — 投資部門別売買状況(売買状況シート)
 - `09_チャート.js` — `ChartDialog` 用データ組み立て
+- `10_決算予定.js` — JPX「決算発表予定日」の Excel から登録銘柄の発表予定を抜き出し、`決算予定` シートを作る(今日〜次月末。月末の6日前から毎日更新)。「評価する」のチェックは銘柄ごとにスクリプトプロパティ `KESSAN_EVAL_CODES` に保存
 - `*Dialog.html` — `HtmlService` のモーダルダイアログ。サーバー関数は `google.script.run` で呼ぶ
 
 有効な高度なサービス: Sheets API v4, Drive API v3(`appsscript.json`)。

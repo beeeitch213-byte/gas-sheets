@@ -32,7 +32,8 @@ function addStockMenu() {
       .addItem('市場別売買代金レイアウトを設定', 'runSetupMarketValueLayoutFromMenu')
       .addItem('空売り集計シートの見出しを設定', 'runSetupShortSellHeadersFromMenu')
       .addSeparator()
-      .addItem('次月シートを作成', 'runCreateNextMonthSheetFromMenu'))
+      .addItem('次月シートを作成', 'runCreateNextMonthSheetFromMenu')
+      .addItem('決算予定を更新(今日〜次月末)', 'runUpdateKessanScheduleFromMenu'))
     .addToUi();
 }
 
@@ -130,6 +131,11 @@ function runReapplyFormatsFromMenu() {
 /** 「次月シートを作成」: 毎日の更新では月末の6日前から自動で作るが、それより前に作りたいとき用 */
 function runCreateNextMonthSheetFromMenu() {
   runLibFromMenu_(() => createNextMonthSheetNow(), '次月シートを作成しました', '次月シートの作成に失敗しました');
+}
+
+/** 「決算予定を更新」: 月末の6日前からは毎日自動で更新するが、それより前に見たいとき用 */
+function runUpdateKessanScheduleFromMenu() {
+  runLibFromMenu_(() => updateKessanSchedule(), '決算予定を更新しました', '決算予定の更新に失敗しました');
 }
 
 function runSetupMarketValueLayoutFromMenu() {
