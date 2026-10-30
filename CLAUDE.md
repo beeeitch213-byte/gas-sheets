@@ -27,6 +27,7 @@ Apps Script エディタ上でこの番号順に並べる(`00` が先頭でな�
 - `07_空売り集計.js` — 空売り集計シート
 - `08_投資部門別.js` — 投資部門別売買状況(売買状況シート)
 - `09_チャート.js` — `ChartDialog` 用データ組み立て
+- `10_決算情報.js` — 「決算情報取得銘柄」ダイアログ(`KessanTargetDialog`)。選んだ銘柄を別ファイル `決算情報` の `決算情報取得銘柄` シートに書き出す(ファイル ID はスクリプトプロパティ `KESSAN_INFO_SPREADSHEET_ID`)。決算スケジュールや決算の評価は Claude の会話側で行い、このシートを対象銘柄として読む
 - `*Dialog.html` — `HtmlService` のモーダルダイアログ。サーバー関数は `google.script.run` で呼ぶ
 
 有効な高度なサービス: Sheets API v4, Drive API v3(`appsscript.json`)。

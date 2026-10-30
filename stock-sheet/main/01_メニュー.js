@@ -18,6 +18,7 @@ function addStockMenu() {
     .addItem('銘柄を並び替え', 'reorderStocksUI')
     .addItem('業種情報を一括取得(銘柄選択)', 'addIndustryBulkUI')
     .addItem('色の設定', 'colorSettingsUI')
+    .addItem('決算情報取得銘柄', 'kessanTargetUI')
     .addSeparator()
     .addSubMenu(ui.createMenu('データ更新')
       .addItem('終値・前日比を更新(日付入力)※市場別売買代金・出来高を含む', 'updateCloseByDateUI')
