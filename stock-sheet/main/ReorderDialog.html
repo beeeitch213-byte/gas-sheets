@@ -6,7 +6,48 @@
       body {
         font-family: Arial, sans-serif;
         padding: 10px;
+        width: 600px;
+      }
+      #layout {
+        display: flex;
+        gap: 16px;
+        align-items: flex-start;
+      }
+      #listArea {
         width: 300px;
+        flex-shrink: 0;
+      }
+      #searchArea {
+        flex-grow: 1;
+        padding-top: 26px;
+      }
+      #searchArea label {
+        display: block;
+        font-size: 13px;
+        margin-bottom: 4px;
+      }
+      #searchBox {
+        width: 100%;
+        padding: 6px;
+        box-sizing: border-box;
+        font-size: 14px;
+      }
+      #searchMsg {
+        font-size: 12px;
+        color: #666;
+        margin-top: 6px;
+        min-height: 16px;
+      }
+      #searchHelp {
+        font-size: 11px;
+        color: #999;
+        margin-top: 10px;
+        line-height: 1.5;
+      }
+      #sortList li.search-hit {
+        background: #ffe066;
+        box-shadow: inset 4px 0 0 #f4b400; /* 左端の目印 */
+        font-weight: bold;
       }
       #hint {
         font-size: 12px;
@@ -61,8 +102,22 @@
     </style>
   </head>
   <body>
-    <div id="hint">ドラッグして順番を並び替えてください</div>
-    <ul id="sortList"></ul>
+    <div id="layout">
+      <div id="listArea">
+        <div id="hint">ドラッグして順番を並び替えてください</div>
+        <ul id="sortList"></ul>
+      </div>
+      <div id="searchArea">
+        <label for="searchBox">銘柄を探す</label>
+        <input type="text" id="searchBox" placeholder="銘柄コード(例: 7203)または銘柄名">
+        <div id="searchMsg"></div>
+        <div id="searchHelp">
+          入力するとその銘柄までスクロールして黄色で示します。<br>
+          銘柄コードは先頭から一致、銘柄名は一部が一致すれば見つかります。<br>
+          複数見つかったときは Enter で次の候補に移ります。
+        </div>
+      </div>
+    </div>
 
     <div id="statusMsg"></div>
 
@@ -147,6 +202,7 @@
           const li = document.createElement('li');
           li.draggable = true;
           li.dataset.code = item.code;
+          li.dataset.name = item.name;
           li.innerHTML = '<span class="drag-handle">≡</span>' + item.code + '(' + item.name + ')';
 
           li.addEventListener('dragstart', function() {
@@ -192,6 +248,52 @@
           list.appendChild(li);
         });
       }
+
+      // ==== 銘柄の検索(右側の検索窓) ====
+      // 入力のたびに、銘柄コードの前方一致・銘柄名の部分一致で探し、見つかった銘柄をリストの中央までスクロールして示す。
+      // 複数見つかったときは Enter で次の候補に移る(並び替えた後でも、今の並び順で探す)。
+      let searchHits = [];
+      let searchIndex = 0;
+
+      function findStocks(query) {
+        const q = query.trim().toUpperCase();
+        if (!q) return [];
+        const items = Array.from(document.querySelectorAll('#sortList li'));
+        const byCode = items.filter(function(li) { return li.dataset.code.toUpperCase().indexOf(q) === 0; });
+        const byName = items.filter(function(li) {
+          return byCode.indexOf(li) === -1 && String(li.dataset.name).toUpperCase().indexOf(q) !== -1;
+        });
+        return byCode.concat(byName); // コードで当たったものを先に
+      }
+
+      function showSearchHit() {
+        document.querySelectorAll('#sortList li.search-hit').forEach(function(el) { el.classList.remove('search-hit'); });
+        const msg = document.getElementById('searchMsg');
+        if (searchHits.length === 0) {
+          msg.textContent = document.getElementById('searchBox').value.trim() ? '見つかりません' : '';
+          return;
+        }
+        const li = searchHits[searchIndex];
+        li.classList.add('search-hit');
+        const list = document.getElementById('sortList');
+        list.scrollTop = li.offsetTop - list.offsetTop - (list.clientHeight - li.offsetHeight) / 2;
+        msg.textContent = li.dataset.code + '(' + li.dataset.name + ')' +
+          (searchHits.length > 1 ? '  ' + (searchIndex + 1) + '/' + searchHits.length + '件' : '');
+      }
+
+      document.getElementById('searchBox').addEventListener('input', function() {
+        searchHits = findStocks(this.value);
+        searchIndex = 0;
+        showSearchHit();
+      });
+
+      document.getElementById('searchBox').addEventListener('keydown', function(e) {
+        if (e.key !== 'Enter') return;
+        e.preventDefault();
+        if (searchHits.length === 0) return;
+        searchIndex = (searchIndex + 1) % searchHits.length;
+        showSearchHit();
+      });
 
       function applyOrder() {
         const items = document.querySelectorAll('#sortList li');

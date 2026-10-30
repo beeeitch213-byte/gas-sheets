@@ -611,7 +611,7 @@ function reorderBothSheets(orderedCodes) {
 }
 
 function reorderStocksUI() {
-  SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutputFromFile('ReorderDialog').setWidth(360).setHeight(800), '銘柄の並び替え');
+  SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutputFromFile('ReorderDialog').setWidth(640).setHeight(800), '銘柄の並び替え');
 }
 
 function getCurrentStockOrder() {
