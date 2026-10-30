@@ -619,11 +619,11 @@ function getCurrentStockOrder() {
   const sheet = getTargetSheet(new Date());
   if (!sheet) return [];
   const lastCol = sheet.getLastColumn();
-  const headRows = sheet.getRange(2, 1, 2, lastCol).getValues(); // 2行目=銘柄コード、3行目=銘柄名
+  const headRows = sheet.getRange(2, 1, 2, lastCol).getValues(); // 2行目=銘柄コード・業種、3行目=銘柄名
   const codeRow = headRows[0], nameRow = headRows[1];
   const list = [];
   for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
-    if (codeRow[col - 1]) list.push({ code: String(codeRow[col - 1]), name: String(nameRow[col - 1]) });
+    if (codeRow[col - 1]) list.push({ code: String(codeRow[col - 1]), name: String(nameRow[col - 1]), industry: String(codeRow[col] || '') });
   }
   return list;
 }

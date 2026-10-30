@@ -33,6 +33,7 @@
         flex-grow: 1;
         min-width: 0;
         padding-top: 26px;
+        overflow-y: auto; /* ダイアログが低いときは右側だけスクロールする */
       }
       #searchArea label {
         display: block;
@@ -51,15 +52,54 @@
         margin-top: 6px;
         min-height: 16px;
       }
+      #selectHitBtn {
+        padding: 3px 10px;
+        font-size: 12px;
+        margin: 8px 0 0 0;
+      }
       #searchHelp {
         font-size: 11px;
         color: #999;
         margin-top: 10px;
         line-height: 1.5;
       }
+      #sortList li.selected {
+        background: #d2e3fc;
+      }
       #sortList li.search-hit {
         background: #ffe066;
         box-shadow: inset 4px 0 0 #f4b400; /* 左端の目印 */
+        font-weight: bold;
+      }
+      .tool-group {
+        margin-top: 14px;
+        padding-top: 10px;
+        border-top: 1px solid #eee;
+        font-size: 12px;
+      }
+      .tool-group .title {
+        font-size: 13px;
+        font-weight: bold;
+        margin-bottom: 6px;
+      }
+      .tool-group .row {
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        margin-bottom: 6px;
+        flex-wrap: wrap;
+      }
+      .tool-group button {
+        padding: 3px 10px;
+        font-size: 12px;
+        margin-left: 0;
+      }
+      .tool-group .note {
+        color: #999;
+        font-size: 11px;
+        line-height: 1.5;
+      }
+      #selectedCount {
         font-weight: bold;
       }
       #hint {
@@ -141,6 +181,44 @@
           銘柄コードは先頭から一致、銘柄名は一部が一致すれば見つかります。<br>
           複数見つかったときは Enter で次の候補に移ります。
         </div>
+        <button id="selectHitBtn" onclick="selectSearchHit()" disabled>見つけた銘柄を選択に追加</button>
+
+        <div class="tool-group">
+          <div class="title">まとめて移動</div>
+          <div class="row">
+            選択中: <span id="selectedCount">0銘柄</span>
+            <button onclick="clearSelection()">選択を解除</button>
+          </div>
+          <div class="row">
+            <button class="needs-selection" onclick="moveSelected('top')">先頭へ</button>
+            <button class="needs-selection" onclick="moveSelected('bottom')">末尾へ</button>
+          </div>
+          <div class="note">
+            クリックで選択、Ctrl(Mac は ⌘)+クリックで追加・解除、Shift+クリックで範囲を選択します。<br>
+            選んだ銘柄のどれかをドラッグすると、まとめて移動します(選んだ銘柄どうしの順番はそのまま)。
+          </div>
+        </div>
+
+        <div class="tool-group">
+          <div class="title">並べ替え</div>
+          <div class="row">
+            対象:
+            <select id="sortScope">
+              <option value="all">すべての銘柄</option>
+              <option value="selected">選択した銘柄</option>
+              <option value="others">選択以外の銘柄</option>
+            </select>
+          </div>
+          <div class="row">
+            <button onclick="sortItems('industry')">業種順</button>
+            <button onclick="sortItems('code')">コード順</button>
+          </div>
+          <div class="note">
+            業種順は東証33業種の順(同じ業種の中はコード順)です。<br>
+            対象の銘柄だけが、今いる場所の中で並び替わります。対象外の銘柄は動きません
+            (例: 選んだ銘柄を先頭へ移動してから「選択以外」を並べ替えると、選んだ銘柄は先頭に残ります)。
+          </div>
+        </div>
       </div>
     </div>
 
@@ -153,6 +231,7 @@
 
     <script>
       let draggingEl = null;
+      let draggingGroup = []; // ドラッグ中にまとめて動かす銘柄(選んだ銘柄、選んでいなければドラッグした銘柄だけ)
 
       // ==== ドラッグ中の自動スクロール ====
       // ブラウザ標準の自動スクロールはリストの端のごく狭い範囲でしか反応しないため、自前で行う。
@@ -219,6 +298,129 @@
           .getCurrentStockOrder();
       });
 
+      // ==== 選択(まとめて移動・並べ替えの対象) ====
+      // 選択は銘柄コードで覚える(再読み込みでリストを作り直しても残る)。
+      let selectedCodes = new Set();
+      let anchorCode = null; // Shift+クリックの範囲選択の起点
+
+      function listItems() {
+        return Array.from(document.querySelectorAll('#sortList li'));
+      }
+
+      function selectedItems() {
+        return listItems().filter(function(li) { return selectedCodes.has(li.dataset.code); });
+      }
+
+      function refreshSelection() {
+        listItems().forEach(function(li) { li.classList.toggle('selected', selectedCodes.has(li.dataset.code)); });
+        document.getElementById('selectedCount').textContent = selectedCodes.size + '銘柄';
+        document.querySelectorAll('.needs-selection').forEach(function(b) { b.disabled = selectedCodes.size === 0; });
+      }
+
+      function onItemClick(li, e) {
+        const code = li.dataset.code;
+        if (e.shiftKey && anchorCode) {
+          const items = listItems();
+          const from = items.findIndex(function(x) { return x.dataset.code === anchorCode; });
+          const to = items.indexOf(li);
+          if (from !== -1) {
+            if (!(e.ctrlKey || e.metaKey)) selectedCodes.clear();
+            items.slice(Math.min(from, to), Math.max(from, to) + 1).forEach(function(x) { selectedCodes.add(x.dataset.code); });
+            refreshSelection();
+            return;
+          }
+        }
+        if (e.ctrlKey || e.metaKey) {
+          if (selectedCodes.has(code)) selectedCodes.delete(code);
+          else selectedCodes.add(code);
+        } else if (selectedCodes.size === 1 && selectedCodes.has(code)) {
+          selectedCodes.clear(); // 1つだけ選んでいる銘柄をもう一度クリックすると解除
+        } else {
+          selectedCodes = new Set([code]);
+        }
+        anchorCode = code;
+        refreshSelection();
+      }
+
+      function clearSelection() {
+        selectedCodes.clear();
+        anchorCode = null;
+        refreshSelection();
+      }
+
+      /** 「先頭へ」「末尾へ」: 選んだ銘柄を、選んだ銘柄どうしの順番のまま先頭・末尾にまとめる */
+      function moveSelected(where) {
+        const list = document.getElementById('sortList');
+        const group = selectedItems();
+        if (group.length === 0) return;
+        if (where === 'top') {
+          group.slice().reverse().forEach(function(li) { list.insertBefore(li, list.firstChild); });
+          list.scrollTop = 0;
+        } else {
+          group.forEach(function(li) { list.appendChild(li); });
+          list.scrollTop = list.scrollHeight;
+        }
+      }
+
+      // ==== 並べ替え(業種順・コード順) ====
+      // 東証33業種の順。シートの業種セルは省略形のこともあるので、完全一致が無ければ前方一致で探す。
+      const INDUSTRY_ORDER = [
+        '水産・農林業', '鉱業', '建設業', '食料品', '繊維製品', 'パルプ・紙', '化学', '医薬品', '石油・石炭製品', 'ゴム製品',
+        'ガラス・土石製品', '鉄鋼', '非鉄金属', '金属製品', '機械', '電気機器', '輸送用機器', '精密機器', 'その他製品',
+        '電気・ガス業', '陸運業', '海運業', '空運業', '倉庫・運輸関連業', '情報・通信業', '卸売業', '小売業',
+        '銀行業', '証券、商品先物取引業', '保険業', 'その他金融業', '不動産業', 'サービス業'
+      ];
+
+      function industryRank(industry) {
+        const s = String(industry || '').trim();
+        if (!s) return INDUSTRY_ORDER.length + 1;                     // 業種が空欄の銘柄は最後
+        if (s === 'その他' || s.indexOf('33業種外') !== -1) return INDUSTRY_ORDER.length; // その他(33業種外)
+        const exact = INDUSTRY_ORDER.indexOf(s);
+        if (exact !== -1) return exact;
+        const prefix = INDUSTRY_ORDER.findIndex(function(name) { return name.indexOf(s) === 0 || s.indexOf(name) === 0; });
+        return prefix !== -1 ? prefix : INDUSTRY_ORDER.length;
+      }
+
+      function compareCode(a, b) {
+        const x = a.dataset.code.toUpperCase(), y = b.dataset.code.toUpperCase();
+        return x < y ? -1 : x > y ? 1 : 0;
+      }
+
+      /**
+       * 対象(すべて/選択した銘柄/選択以外)の銘柄だけを、今いる場所(枠)の中で並べ替える。対象外の銘柄は動かさない。
+       * key: 'industry'(業種順、同じ業種はコード順) / 'code'(コード順)
+       */
+      function sortItems(key) {
+        const scope = document.getElementById('sortScope').value;
+        const items = listItems();
+        const isTarget = function(li) {
+          if (scope === 'selected') return selectedCodes.has(li.dataset.code);
+          if (scope === 'others') return !selectedCodes.has(li.dataset.code);
+          return true;
+        };
+        const targets = items.filter(isTarget);
+        const statusMsg = document.getElementById('statusMsg');
+        statusMsg.style.display = 'block';
+        if (targets.length < 2) {
+          statusMsg.style.color = '#e37400';
+          statusMsg.textContent = scope === 'selected' ? '並べ替える銘柄を2つ以上選んでください' : '並べ替える銘柄がありません';
+          return;
+        }
+        const sorted = targets.slice().sort(function(a, b) {
+          if (key === 'industry') {
+            const d = industryRank(a.dataset.industry) - industryRank(b.dataset.industry);
+            if (d !== 0) return d;
+          }
+          return compareCode(a, b);
+        });
+        let k = 0;
+        const result = items.map(function(li) { return isTarget(li) ? sorted[k++] : li; });
+        const list = document.getElementById('sortList');
+        result.forEach(function(li) { list.appendChild(li); });
+        statusMsg.style.color = '#333';
+        statusMsg.textContent = targets.length + '銘柄を' + (key === 'industry' ? '業種順' : 'コード順') + 'に並べ替えました(「この順番で適用」でシートに反映します)';
+      }
+
       function renderList(items) {
         const list = document.getElementById('sortList');
         list.innerHTML = '';
@@ -228,16 +430,24 @@
           li.draggable = true;
           li.dataset.code = item.code;
           li.dataset.name = item.name;
+          li.dataset.industry = item.industry || '';
           li.innerHTML = '<span class="drag-handle">≡</span>' + item.code + '(' + item.name + ')';
+          li.title = item.industry || '';
+
+          li.addEventListener('click', function(e) { onItemClick(li, e); });
 
           li.addEventListener('dragstart', function() {
+            // 選んだ銘柄をドラッグしたときはまとめて動かす。選んでいない銘柄をドラッグしたときはその銘柄だけ
+            if (!selectedCodes.has(li.dataset.code)) clearSelection();
             draggingEl = li;
-            li.classList.add('dragging');
+            draggingGroup = selectedCodes.size > 0 ? selectedItems() : [li];
+            draggingGroup.forEach(function(el) { el.classList.add('dragging'); });
             startAutoScroll();
           });
 
           li.addEventListener('dragend', function() {
-            li.classList.remove('dragging');
+            draggingGroup.forEach(function(el) { el.classList.remove('dragging'); });
+            draggingGroup = [];
             draggingEl = null;
             stopAutoScroll();
             Array.from(list.children).forEach(function(el) {
@@ -247,7 +457,7 @@
 
           li.addEventListener('dragover', function(e) {
             e.preventDefault();
-            if (li !== draggingEl) {
+            if (draggingGroup.indexOf(li) === -1) {
               li.classList.add('drag-over');
             }
           });
@@ -259,19 +469,23 @@
           li.addEventListener('drop', function(e) {
             e.preventDefault();
             li.classList.remove('drag-over');
-            if (draggingEl && draggingEl !== li) {
+            if (draggingEl && draggingGroup.indexOf(li) === -1) {
               const rect = li.getBoundingClientRect();
               const insertAfter = (e.clientY - rect.top) > rect.height / 2;
               if (insertAfter) {
-                li.after(draggingEl);
+                li.after.apply(li, draggingGroup);
               } else {
-                li.before(draggingEl);
+                li.before.apply(li, draggingGroup);
               }
             }
           });
 
           list.appendChild(li);
         });
+        // 再読み込みで消えた銘柄は選択からも外す
+        const codes = new Set(items.map(function(item) { return item.code; }));
+        selectedCodes.forEach(function(code) { if (!codes.has(code)) selectedCodes.delete(code); });
+        refreshSelection();
       }
 
       // ==== 銘柄の検索(右側の検索窓) ====
@@ -294,6 +508,7 @@
       function showSearchHit() {
         document.querySelectorAll('#sortList li.search-hit').forEach(function(el) { el.classList.remove('search-hit'); });
         const msg = document.getElementById('searchMsg');
+        document.getElementById('selectHitBtn').disabled = searchHits.length === 0;
         if (searchHits.length === 0) {
           msg.textContent = document.getElementById('searchBox').value.trim() ? '見つかりません' : '';
           return;
@@ -304,6 +519,15 @@
         list.scrollTop = li.offsetTop - list.offsetTop - (list.clientHeight - li.offsetHeight) / 2;
         msg.textContent = li.dataset.code + '(' + li.dataset.name + ')' +
           (searchHits.length > 1 ? '  ' + (searchIndex + 1) + '/' + searchHits.length + '件' : '');
+      }
+
+      /** 「見つけた銘柄を選択に追加」: 今黄色で示している銘柄を選択に加える */
+      function selectSearchHit() {
+        const li = searchHits[searchIndex];
+        if (!li) return;
+        selectedCodes.add(li.dataset.code);
+        anchorCode = li.dataset.code;
+        refreshSelection();
       }
 
       document.getElementById('searchBox').addEventListener('input', function() {
