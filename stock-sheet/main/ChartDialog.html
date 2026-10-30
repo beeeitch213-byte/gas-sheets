@@ -116,19 +116,34 @@
         legend: { position: "bottom" },
         colors: withExtra ? [panel.color, panel.maColor, panel.extraColor] : [panel.color, panel.maColor],
         tooltip: { isHtml: true },
-        chartArea: { width: "78%", height: "62%" }
+        // 日付の軸と凡例の分だけ下を空けておく(割合で取ると、低いパネルで日付が切れる)
+        chartArea: { left: 100, right: 40, top: 40, bottom: 70 },
+        hAxis: {
+          slantedText: false,
+          maxAlternation: 1,
+          showTextEvery: Math.max(1, Math.ceil(rows.length / PANEL_DATE_LABEL_COUNT)), // 日付が重ならないよう間引く
+          textStyle: { fontSize: 11 }
+        }
       };
 
       const chart = new google.visualization.LineChart(containerEl);
       chart.draw(dataTable, options);
     }
 
+    const PANEL_DATE_LABEL_COUNT = 12; // 日付の軸に出す日付の数の目安
+    const PANEL_MIN_HEIGHT = 320;      // パネル1つの最低の高さ(px)。多いときはダイアログをスクロールする
+
     function renderPanelsMode(bundle) {
       const container = document.getElementById('main_container');
       container.innerHTML = '';
+      // ダイアログの残りの高さをパネルで分ける(1つだけならダイアログいっぱいに広げる)
+      const toolbar = document.getElementById('toolbar');
+      const available = window.innerHeight - (toolbar ? toolbar.offsetHeight : 0) - 8;
+      const panelHeight = Math.max(PANEL_MIN_HEIGHT, Math.floor(available / Math.max(1, bundle.panels.length)));
       bundle.panels.forEach(function (panel, idx) {
         const div = document.createElement('div');
         div.id = 'panel_' + idx;
+        div.style.height = panelHeight + 'px';
         container.appendChild(div);
         renderPanel(div, panel);
       });
