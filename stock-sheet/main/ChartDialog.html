@@ -185,7 +185,7 @@
       const start = Math.ceil(dmin / step) * step;
       const ticks = [];
       for (let v = start; v <= dmax + step * 1e-6; v += step) {
-        ticks.push(Math.round(v * 1000) / 1000);
+        ticks.push(Math.round(v * 1000) / 1000 || 0); // -0 を 0 にする
       }
       if (ticks.length < 2) ticks.push(dmin, dmax);
       return ticks;
@@ -298,12 +298,32 @@
       // 軸ごとに、所属する全系列の値の範囲から帯の位置(viewWindow)と目盛りを決める。
       // left=左外側、right=右外側(Google Chartsが自動で配置できる2箇所。軸0が左、軸1が右に出る)。
       // inner=物理的な余白がないため、ネイティブのラベルは消し、描画後にプロットエリア内側の左寄りへ自前で重ねて描画する。
+      // shareScaleWith: 指定した軸と同じ目盛りの大きさ(viewWindow)を使い、目盛り(補助線)だけを別に出す軸。
+      // 元の軸の範囲は、この軸の系列も含めて決める。目盛りは帯のうち tickRange(0=下端・1=上端)の範囲にだけ出す。
       axesDefs.forEach(function (ax, axisIdx) {
+        if (ax.shareScaleWith !== undefined) axisKeys[ax.shareScaleWith] = axisKeys[ax.shareScaleWith].concat(axisKeys[axisIdx]);
+      });
+      axesDefs.forEach(function (ax, axisIdx) {
+        if (ax.shareScaleWith !== undefined) return;
         const textPosition = (ax.position === 'left' || ax.position === 'right') ? 'out' : 'none';
-        const axisConfig = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format, ax.tickCount, ax.centerOnMean, ax.zeroBased);
-        vAxes[axisIdx] = axisConfig;
+        vAxes[axisIdx] = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format, ax.tickCount, ax.centerOnMean, ax.zeroBased);
+      });
+      axesDefs.forEach(function (ax, axisIdx) {
+        if (ax.shareScaleWith === undefined) return;
+        const base = vAxes[ax.shareScaleWith];
+        const range = base.viewWindow.max - base.viewWindow.min;
+        const tickRange = ax.tickRange || [0, 1];
+        const valueAt = function (f) { return base.viewWindow.min + range * (ax.band[0] + (ax.band[1] - ax.band[0]) * f); };
+        vAxes[axisIdx] = Object.assign({}, base, {
+          ticks: computeNiceTicks_(valueAt(tickRange[0]), valueAt(tickRange[1]), ax.tickCount || 4),
+          textStyle: { color: ax.color, fontSize: 10 },
+          format: ax.format || base.format,
+          gridlines: { color: hexToRgba_(ax.color, 0.15), count: -1 }
+        });
+      });
+      axesDefs.forEach(function (ax, axisIdx) {
         if (ax.position === 'inner' || ax.position === 'innerRight') {
-          manualLabelAxes.push({ axisIndex: axisIdx, ticks: axisConfig.ticks, color: ax.color, side: ax.position === 'innerRight' ? 'right' : 'left' });
+          manualLabelAxes.push({ axisIndex: axisIdx, ticks: vAxes[axisIdx].ticks, color: ax.color, side: ax.position === 'innerRight' ? 'right' : 'left' });
         }
       });
 
@@ -356,7 +376,9 @@
       const chartArea = layout.getChartAreaBoundingBox();
       chartDiv.style.position = 'relative';
 
+      const MIN_LABEL_GAP_PX = 12; // 目盛りの数値がこれより近いときは、間の数値を出さない(補助線は残す)
       manualLabelAxes.forEach(function (axisInfo) {
+        let lastY = null;
         axisInfo.ticks.forEach(function (v) {
           let y;
           try {
@@ -365,6 +387,8 @@
             return;
           }
           if (y === undefined || y === null || isNaN(y)) return;
+          if (lastY !== null && Math.abs(y - lastY) < MIN_LABEL_GAP_PX) return;
+          lastY = y;
 
           const label = document.createElement('span');
           label.className = 'manual-axis-label';
