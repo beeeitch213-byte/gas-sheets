@@ -360,9 +360,9 @@ function buildStockChartBundle_(code, periodDays) {
       color: '#34a853', label: '信用倍率', unit: '倍' });
   }
 
-  // 業種売買代金合計+業種の空売り売買代金合計(同じ帯に重ねる)。
-  // 空売りは売買代金合計より桁が小さく、同じ軸だと帯の下の方に張り付いて動きが見づらいため、別の軸にして
-  // 目盛りを右に出す(売買代金合計の目盛りは左)。
+  // 業種売買代金合計+業種の空売り売買代金合計(同じ軸)。
+  // 軸の下端を0にして、空売りの線の高さが「売買代金合計を100としたときの空売り比率」と同じ大きさになるようにする
+  // (例: 空売り比率40%の日は、空売りの線が売買代金合計の線の4割の高さに来る)。
   // 当月シートに業種が無いときだけ、テンプレートも含めて探し直す
   const industryLabel = stockRaw.industryLabel || getStockIndustryLabel_(code);
   const series = industryLabel ? buildIndustryShortSellSeriesByLabel(industryLabel) : null;
@@ -371,7 +371,7 @@ function buildStockChartBundle_(code, periodDays) {
   } else if (!series || series.points.length === 0) {
     notes.push('業種「' + industryLabel + '」に対応する空売り集計データが見つかりません。');
   } else {
-    axes.push({ band: [0.37, 0.64], color: '#4fc3f7', position: 'inner', format: '#,##0' });
+    axes.push({ band: [0.37, 0.64], color: '#4fc3f7', position: 'inner', format: '#,##0', zeroBased: true });
     const industryAxis = axes.length - 1;
 
     const industryPoints = series.points
@@ -384,10 +384,8 @@ function buildStockChartBundle_(code, periodDays) {
     const shortPoints = series.points
       .filter(p => typeof p.shortAmountSum === 'number')
       .map(p => ({ date: new Date(p.date), value: p.shortAmountSum, ratioInfo: p.ratioSum }));
-    axes.push({ band: [0.37, 0.64], color: '#202124', position: 'innerRight', format: '#,##0' });
-    const shortAxis = axes.length - 1;
     specs.push({ points: shortPoints, prefix: 'short', rateDecimals: 2 });
-    seriesDefs.push({ axisIndex: shortAxis, key: 'shortValue', maKey: 'shortMa', changeKey: 'shortChange', rateKey: 'shortRate', ratioKey: 'shortRatioInfo',
+    seriesDefs.push({ axisIndex: industryAxis, key: 'shortValue', maKey: 'shortMa', changeKey: 'shortChange', rateKey: 'shortRate', ratioKey: 'shortRatioInfo',
       color: '#202124', maColor: '#9e9e9e', label: '業種(' + industryLabel + ')空売り(あり+なし)売買代金合計', unit: '百万円' });
   }
 

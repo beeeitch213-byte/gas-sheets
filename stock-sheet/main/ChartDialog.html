@@ -194,8 +194,9 @@
     /**
      * tickCount: 目盛りの数の目安(省略時4)。
      * centerOnMean: trueなら、平均値が帯の縦の中央に来るよう、平均から上下に同じ幅の範囲を取る。
+     * zeroBased: trueなら、帯の下端を0にする(同じ軸の線どうしの高さの比が、値の比と同じになる)。
      */
-    function computeBandAxis(rows, keys, fracMin, fracMax, gridColor, textPosition, format, tickCount, centerOnMean) {
+    function computeBandAxis(rows, keys, fracMin, fracMax, gridColor, textPosition, format, tickCount, centerOnMean, zeroBased) {
       let dmin = null, dmax = null, sum = 0, count = 0;
       rows.forEach(function (r) {
         keys.forEach(function (k) {
@@ -209,6 +210,7 @@
         });
       });
       if (dmin === null) { dmin = 0; dmax = 1; }
+      if (zeroBased && dmin > 0) dmin = 0;
       if (centerOnMean && count > 0) {
         const mean = sum / count;
         let half = Math.max(dmax - mean, mean - dmin);
@@ -298,7 +300,7 @@
       // inner=物理的な余白がないため、ネイティブのラベルは消し、描画後にプロットエリア内側の左寄りへ自前で重ねて描画する。
       axesDefs.forEach(function (ax, axisIdx) {
         const textPosition = (ax.position === 'left' || ax.position === 'right') ? 'out' : 'none';
-        const axisConfig = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format, ax.tickCount, ax.centerOnMean);
+        const axisConfig = computeBandAxis(rows, axisKeys[axisIdx], ax.band[0], ax.band[1], ax.color, textPosition, ax.format, ax.tickCount, ax.centerOnMean, ax.zeroBased);
         vAxes[axisIdx] = axisConfig;
         if (ax.position === 'inner' || ax.position === 'innerRight') {
           manualLabelAxes.push({ axisIndex: axisIdx, ticks: axisConfig.ticks, color: ax.color, side: ax.position === 'innerRight' ? 'right' : 'left' });
