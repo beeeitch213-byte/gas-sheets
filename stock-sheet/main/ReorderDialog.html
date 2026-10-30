@@ -53,6 +53,14 @@
         font-size: 12px;
         color: #666;
         margin-bottom: 10px;
+        display: flex;
+        align-items: center;
+        justify-content: space-between;
+      }
+      #reloadBtn {
+        padding: 2px 8px;
+        font-size: 11px;
+        margin-left: 0;
       }
       #sortList {
         list-style: none;
@@ -104,7 +112,10 @@
   <body>
     <div id="layout">
       <div id="listArea">
-        <div id="hint">ドラッグして順番を並び替えてください</div>
+        <div id="hint">
+          <span id="hintText">ドラッグして順番を並び替えてください</span>
+          <button id="reloadBtn" onclick="reloadList()" title="銘柄追加で増えた銘柄をリストに反映します">再読み込み</button>
+        </div>
         <ul id="sortList"></ul>
       </div>
       <div id="searchArea">
@@ -189,7 +200,7 @@
         google.script.run
           .withSuccessHandler(renderList)
           .withFailureHandler(function(err) {
-            document.getElementById('hint').textContent = '読み込みに失敗しました: ' + err.message;
+            document.getElementById('hintText').textContent = '読み込みに失敗しました: ' + err.message;
           })
           .getCurrentStockOrder();
       });
@@ -294,6 +305,46 @@
         searchIndex = (searchIndex + 1) % searchHits.length;
         showSearchHit();
       });
+
+      /**
+       * 「再読み込み」: 当月シートの最新の銘柄一覧を読み直す(サイドバーの銘柄追加で増えた銘柄を反映する)。
+       * ここまでに並べ替えた順番は残し、新しく増えた銘柄は末尾に足す。シートから消えた銘柄はリストからも消す。
+       */
+      function reloadList() {
+        const btn = document.getElementById('reloadBtn');
+        const statusMsg = document.getElementById('statusMsg');
+        btn.disabled = true;
+        google.script.run
+          .withSuccessHandler(function(items) {
+            btn.disabled = false;
+            const current = Array.from(document.querySelectorAll('#sortList li')).map(function(li) { return li.dataset.code; });
+            const byCode = {};
+            items.forEach(function(item) { byCode[item.code] = item; });
+            const kept = current.filter(function(code) { return byCode[code]; }).map(function(code) { return byCode[code]; });
+            const added = items.filter(function(item) { return current.indexOf(item.code) === -1; });
+            const removedCount = current.length - kept.length;
+            const scrollTop = document.getElementById('sortList').scrollTop;
+            renderList(kept.concat(added));
+            document.getElementById('sortList').scrollTop = scrollTop;
+            // 検索結果は古いリストの要素を指しているので、今の入力で探し直す
+            searchHits = findStocks(document.getElementById('searchBox').value);
+            searchIndex = 0;
+            if (searchHits.length > 0) showSearchHit();
+            statusMsg.style.display = 'block';
+            statusMsg.style.color = '#333';
+            statusMsg.textContent = '銘柄一覧を読み込みました' +
+              (added.length > 0 ? '(追加: ' + added.map(function(i) { return i.code; }).join(', ') + ')' : '') +
+              (removedCount > 0 ? '(削除: ' + removedCount + '件)' : '') +
+              (added.length === 0 && removedCount === 0 ? '(変更なし)' : '');
+          })
+          .withFailureHandler(function(err) {
+            btn.disabled = false;
+            statusMsg.style.display = 'block';
+            statusMsg.style.color = '#d32f2f';
+            statusMsg.textContent = '読み込みに失敗しました: ' + err.message;
+          })
+          .getCurrentStockOrder();
+      }
 
       function applyOrder() {
         const items = document.querySelectorAll('#sortList li');
