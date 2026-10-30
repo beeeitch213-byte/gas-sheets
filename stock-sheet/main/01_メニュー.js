@@ -30,7 +30,9 @@ function addStockMenu() {
       .addItem('スパークラインを全シートで再設定(#REF!復旧用)', 'runReapplyAllSparklineFormulasFromMenu')
       .addSeparator()
       .addItem('市場別売買代金レイアウトを設定', 'runSetupMarketValueLayoutFromMenu')
-      .addItem('空売り集計シートの見出しを設定', 'runSetupShortSellHeadersFromMenu'))
+      .addItem('空売り集計シートの見出しを設定', 'runSetupShortSellHeadersFromMenu')
+      .addSeparator()
+      .addItem('次月シートを作成', 'runCreateNextMonthSheetFromMenu'))
     .addToUi();
 }
 
@@ -123,6 +125,11 @@ function runUpdateJpxStatsForDateFromDialog(startDateStr, endDateStr, forceRefet
 
 function runReapplyFormatsFromMenu() {
   runLibFromMenu_(() => reapplyAllFormatsFromTemplate(), '基準セルの書式を再適用しました', '処理に失敗しました');
+}
+
+/** 「次月シートを作成」: 毎日の更新では月末の6日前から自動で作るが、それより前に作りたいとき用 */
+function runCreateNextMonthSheetFromMenu() {
+  runLibFromMenu_(() => createNextMonthSheetNow(), '次月シートを作成しました', '次月シートの作成に失敗しました');
 }
 
 function runSetupMarketValueLayoutFromMenu() {

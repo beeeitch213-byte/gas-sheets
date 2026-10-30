@@ -609,6 +609,14 @@ function createNextMonthSheetIfNeeded(currentYear, currentMonth, startMs) {
   let nextYear = currentYear;
   let nextMonth = currentMonth + 1;
   if (nextMonth > 12) { nextMonth = 1; nextYear += 1; }
+  Logger.log(createMonthSheet_(nextYear, nextMonth, startMs));
+}
+
+/**
+ * 指定した年月の月次シート(例: 11月26年)をテンプレートから作り、日付・曜日・休場マークを入れる。結果のメッセージを返す。
+ * 中断しても安全に再開できる作り(シートが既にあれば作り直さず、未入力の日だけ続きから埋める)。
+ */
+function createMonthSheet_(nextYear, nextMonth, startMs) {
   const newSheetName = nextMonth + '月' + String(nextYear).slice(-2) + '年';
 
   const ss = getMainSpreadsheet();
@@ -617,7 +625,7 @@ function createNextMonthSheetIfNeeded(currentYear, currentMonth, startMs) {
 
   if (!newSheet) {
     const template = ss.getSheetByName(TEMPLATE_SHEET_NAME);
-    if (!template) return;
+    if (!template) return '「' + TEMPLATE_SHEET_NAME + '」シートが見つからないため、' + newSheetName + ' シートを作成できませんでした';
     newSheet = template.copyTo(ss);
     newSheet.setName(newSheetName);
     ss.setActiveSheet(newSheet);
@@ -626,11 +634,10 @@ function createNextMonthSheetIfNeeded(currentYear, currentMonth, startMs) {
   }
 
   const dayLabels = newSheet.getRange(CLOSE_FIRST_ROW, 1, daysInMonth, 1).getValues();
-  if (dayLabels[daysInMonth - 1][0] !== '') return; // 最終日まで入力済み=作成完了済み
+  if (dayLabels[daysInMonth - 1][0] !== '') return newSheetName + ' シートは作成済みです'; // 最終日まで入力済み=作成完了済み
 
   if (startMs && (Date.now() - startMs) > RUN_TIME_LIMIT_MS) {
-    Logger.log(newSheetName + ' シートの作成は時間切れのためできませんでした。翌日以降の更新で続きが作成されます。');
-    return;
+    return newSheetName + ' シートの作成は時間切れのためできませんでした。もう一度実行するか、翌日以降の更新で続きが作成されます。';
   }
 
   const lastCol = newSheet.getLastColumn();
@@ -684,5 +691,12 @@ function createNextMonthSheetIfNeeded(currentYear, currentMonth, startMs) {
   if (a1List.length > 0) newSheet.getRangeList(a1List).setValue(HOLIDAY_LABEL).setBackground(HOLIDAY_COLOR);
 
   blocks.forEach(b => newSheet.getRange(b.firstRow, 1, b.rows, 1).setValues(dayLabelCol.slice(0, b.rows)));
-  Logger.log(newSheetName + ' シートの作成が完了しました');
+  return newSheetName + ' シートの作成が完了しました';
+}
+
+/** 「データ修正 → 次月シートを作成」: 月末を待たずに、今日の翌月のシートを作る(作成済みなら何もしない) */
+function createNextMonthSheetNow() {
+  const today = new Date();
+  const next = new Date(today.getFullYear(), today.getMonth() + 1, 1);
+  return createMonthSheet_(next.getFullYear(), next.getMonth() + 1, Date.now());
 }
