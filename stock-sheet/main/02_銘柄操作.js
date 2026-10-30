@@ -218,10 +218,12 @@ function setupMarketValueLayout() {
 
 /**
  * 銘柄追加はサイドバーで開く(ダイアログは同時に1つしか開けないため。サイドバーなら、並び替えのダイアログと同時に使える)。
+ * 追加した銘柄をそのまま並べ替えられるよう、並び替えのダイアログもセットで開く。
  */
 function addNewStockUI() {
   const html = HtmlService.createHtmlOutputFromFile('StockInputDialog').setTitle('新規銘柄を追加');
   SpreadsheetApp.getUi().showSidebar(html);
+  reorderStocksUI();
 }
 
 // 銘柄の追加・削除・並び替えは、どれも銘柄の列を動かすので同時に実行しない(列の位置がずれて中身が混ざるため)。
