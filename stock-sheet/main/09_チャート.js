@@ -179,8 +179,26 @@ function fetchStockRawPoints_(code) {
 }
 
 /**
+ * extraの移動平均を、各行の row.extraMa に入れる(全期間で計算してから期間で絞り込むので、表示の先頭から線が出る)。
+ * 直近period日のextraに空き(null)があるところは null にする。
+ */
+function addExtraMovingAverage_(points, chartRows, period) {
+  let windowSum = 0;
+  let filled = 0; // 直近period日のうち、extraが入っている日数
+  points.forEach((p, idx) => {
+    const v = typeof p.extra === 'number' ? p.extra : null;
+    if (v !== null) { windowSum += v; filled++; }
+    if (idx >= period) {
+      const old = points[idx - period].extra;
+      if (typeof old === 'number') { windowSum -= old; filled--; }
+    }
+    chartRows[idx].extraMa = idx >= period - 1 && filled === period ? windowSum / period : null;
+  });
+}
+
+/**
  * 「空売り集計」シートの全期間チャートボタン用のデータを組み立てる。
- * 青=合計売買代金、赤=25日移動平均、黒=空売り(価格規制あり+なし)の売買代金合計、の3系列。
+ * 青=合計売買代金、赤=25日移動平均、黒=空売り(価格規制あり+なし)の売買代金合計、灰=その25日移動平均、の4系列。
  * 空売り比率(あり+なし)はグラフの線にはせず、マウスオーバーのツールチップにのみ小数点第二位まで表示する。
  * periodDays: 表示する期間(日数)。0または負数で全期間。
  */
@@ -198,6 +216,7 @@ function buildShortSellChartPayload_(col, periodDays) {
   }));
 
   const chartRows = buildChartRowsWithMA_(points, MA_PERIOD, 0); // 前日比率は小数点なし
+  addExtraMovingAverage_(points, chartRows, MA_PERIOD);
   const displayChartData = filterChartRowsByPeriod_(points, chartRows, periodDays);
 
   return {
@@ -206,7 +225,8 @@ function buildShortSellChartPayload_(col, periodDays) {
     maPeriod: MA_PERIOD,
     closeLabel: '売買代金合計',
     closeUnit: '百万円',
-    extraLabel: '空売り(価格規制あり+なし)の合計売買代金'
+    extraLabel: '空売り(価格規制あり+なし)の合計売買代金',
+    extraMaLabel: '空売り合計の' + MA_PERIOD + '日移動平均' // 凡例に収まるよう短くする
   };
 }
 
@@ -224,7 +244,9 @@ function wrapSinglePanelBundle_(payload) {
       color: '#4285f4',
       maColor: '#ea4335',
       extraLabel: payload.extraLabel || '',
-      extraColor: payload.extraLabel ? '#202124' : ''
+      extraColor: payload.extraLabel ? '#202124' : '',
+      extraMaLabel: payload.extraMaLabel || '',
+      extraMaColor: '#9e9e9e'
     }]
   };
 }
