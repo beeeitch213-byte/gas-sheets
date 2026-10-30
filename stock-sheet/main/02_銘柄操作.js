@@ -216,13 +216,32 @@ function setupMarketValueLayout() {
   return 'プライム/スタンダード/グロースのレイアウトを設定しました(' + results.join(' / ') + ')';
 }
 
+/**
+ * 銘柄追加はサイドバーで開く(ダイアログは同時に1つしか開けないため。サイドバーなら、並び替えのダイアログと同時に使える)。
+ */
 function addNewStockUI() {
-  const html = HtmlService.createHtmlOutputFromFile('StockInputDialog').setWidth(350).setHeight(320);
-  SpreadsheetApp.getUi().showModalDialog(html, '新規銘柄を追加');
+  const html = HtmlService.createHtmlOutputFromFile('StockInputDialog').setTitle('新規銘柄を追加');
+  SpreadsheetApp.getUi().showSidebar(html);
+}
+
+// 銘柄の追加・削除・並び替えは、どれも銘柄の列を動かすので同時に実行しない(列の位置がずれて中身が混ざるため)。
+// 後から来た処理は、前の処理が終わるまで最大STOCK_COLUMN_LOCK_WAIT_MSだけ待つ。
+const STOCK_COLUMN_LOCK_WAIT_MS = 3 * 60 * 1000;
+
+function withStockColumnLock_(actionLabel, fn) {
+  const lock = LockService.getDocumentLock();
+  if (!lock.tryLock(STOCK_COLUMN_LOCK_WAIT_MS)) {
+    throw new Error('ほかの銘柄の追加・削除・並び替えが実行中のため、' + actionLabel + 'できませんでした。少し待ってからもう一度実行してください。');
+  }
+  try {
+    return fn();
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function addNewStockFromDialog(code, name) {
-  addNewStock(code, name);
+  withStockColumnLock_('銘柄を追加', () => addNewStock(code, name));
   return '銘柄コード ' + code + '(' + name + ')を追加しました';
 }
 
@@ -420,7 +439,11 @@ function deleteStockUI() {
   );
   if (confirmResp !== ui.Button.YES) return;
 
-  ui.alert(deleteStock(code));
+  try {
+    ui.alert(withStockColumnLock_('銘柄を削除', () => deleteStock(code)));
+  } catch (e) {
+    ui.alert(e.message);
+  }
 }
 
 function normalizeBufferColumns(sheet) {
@@ -575,6 +598,10 @@ function getReorderPayloadForDatabase(dbSheet, orderedCodes) {
  * 全シート分のペイロードをSheets APIで一括更新(要:サービスでGoogle Sheets API有効化)
  */
 function reorderBothSheets(orderedCodes) {
+  return withStockColumnLock_('並び替え', () => reorderBothSheetsUnlocked_(orderedCodes));
+}
+
+function reorderBothSheetsUnlocked_(orderedCodes) {
   const ss = SpreadsheetApp.getActiveSpreadsheet();
   const currentSheet = getTargetSheet(new Date());
   const template = ss.getSheetByName(TEMPLATE_SHEET_NAME);
@@ -610,8 +637,9 @@ function reorderBothSheets(orderedCodes) {
   return '高速並び替え完了(API一括更新): ' + messages.join(' / ');
 }
 
+/** 並び替えは、開いたままサイドバー(銘柄追加)やシートも操作できるダイアログ(モードレス)で開く */
 function reorderStocksUI() {
-  SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutputFromFile('ReorderDialog').setWidth(640).setHeight(800), '銘柄の並び替え');
+  SpreadsheetApp.getUi().showModelessDialog(HtmlService.createHtmlOutputFromFile('ReorderDialog').setWidth(640).setHeight(800), '銘柄の並び替え');
 }
 
 function getCurrentStockOrder() {

@@ -57,6 +57,7 @@ Apps Script エディタ上でこの番号順に並べる(`00` が先頭でな�
 - 外部取得は `UrlFetchApp.fetch(url, { muteHttpExceptions: true })` でステータスコードを確認する。
 - 長時間処理は `RUN_TIME_LIMIT_MS`(4.5 分)で打ち切り、進捗を `PropertiesService` に保存して再実行で続きから進める(GAS の 6 分制限対策)。
 - メニュー実行のラッパーは `runLibFromMenu_(fn, 既定メッセージ, 失敗時の接頭辞)` を使う。
+- 銘柄の列を動かす処理(追加・削除・並び替え)は `withStockColumnLock_` で囲み、同時に実行しない(銘柄追加はサイドバー、並び替えはモードレスダイアログなので、並行して操作できる)。
 - タイムゾーンは `Asia/Tokyo`。祝日は Google の「日本の祝日」カレンダーから国民の祝日名だけを採用する(七夕などの行事を除外)。
 
 ## デプロイ
