@@ -3,22 +3,35 @@
   <head>
     <base target="_top">
     <style>
+      /* ダイアログの枠に収まるよう、高さ・幅を画面(100vh・100%)に合わせ、リストだけをスクロールさせる */
+      html, body {
+        height: 100%;
+      }
       body {
         font-family: Arial, sans-serif;
+        margin: 0;
         padding: 10px;
-        width: 600px;
+        box-sizing: border-box;
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
       }
       #layout {
         display: flex;
         gap: 16px;
-        align-items: flex-start;
+        flex: 1;
+        min-height: 0;
       }
       #listArea {
         width: 300px;
         flex-shrink: 0;
+        display: flex;
+        flex-direction: column;
+        min-height: 0;
       }
       #searchArea {
         flex-grow: 1;
+        min-width: 0;
         padding-top: 26px;
       }
       #searchArea label {
@@ -66,7 +79,8 @@
         list-style: none;
         margin: 0;
         padding: 0;
-        max-height: 640px;
+        flex: 1;
+        min-height: 0;
         overflow-y: auto;
         border: 1px solid #ddd;
         border-radius: 4px;
@@ -94,7 +108,7 @@
         color: #999;
       }
       .buttons {
-        margin-top: 16px;
+        margin-top: 12px;
         text-align: right;
       }
       button {
