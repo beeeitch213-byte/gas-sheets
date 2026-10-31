@@ -394,14 +394,14 @@ function buildStockChartBundle_(code, periodDays) {
       color: '#202124', maColor: '#9e9e9e', label: '業種(' + industryLabel + ')空売り(あり+なし)売買代金合計', unit: '百万円' });
   }
 
-  // 信用売残・買残。桁が大きく違うことが多い(例: 売残5千株・買残4万株)ため、同じ軸にすると
-  // 線が帯の上端と下端に分かれて見づらい。同じ帯に重ねたまま売残・買残に別々の軸を持たせ、
-  // 目盛りは売残を左・買残を右に表示する。どちらも平均値が帯の縦の中央に来るように範囲を決める(centerOnMean)。
+  // 信用売残・買残。桁が大きく違うことが多い(例: 売残5千株・買残4万株)ため、別々の軸にする。
+  // 下段の帯を上下に分け、上半分=買残(目盛りは右)、下半分=売残(目盛りは左)に描いて線が重ならないようにする。
+  // どちらも平均値がそれぞれの帯の縦の中央に来るように範囲を決める(centerOnMean)。
   if (marginPoints.length > 0) {
     const marginUnit = MARKET_VALUE_ITEMS.some(item => item.code === String(code)) ? '百万株' : '千株';
-    axes.push({ band: [0.03, 0.30], color: '#1a73e8', position: 'inner', format: '#,##0.###', centerOnMean: true });
+    axes.push({ band: [0.03, 0.155], color: '#1a73e8', position: 'inner', format: '#,##0.###', centerOnMean: true, tickCount: 3 });
     const sellAxis = axes.length - 1;
-    axes.push({ band: [0.03, 0.30], color: '#d93025', position: 'innerRight', format: '#,##0.###', centerOnMean: true });
+    axes.push({ band: [0.175, 0.30], color: '#d93025', position: 'innerRight', format: '#,##0.###', centerOnMean: true, tickCount: 3 });
     const buyAxis = axes.length - 1;
     specs.push({ points: marginPoints.map(p => ({ date: p.date, value: p.sell })), prefix: 'sell', rateDecimals: 2 });
     specs.push({ points: marginPoints.map(p => ({ date: p.date, value: p.buy })), prefix: 'buy', rateDecimals: 2 });
