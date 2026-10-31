@@ -64,34 +64,24 @@ function fillHolidayMarksForNewStock(sheet, col) {
   const year = parsed.year;
   const month = parsed.month;
   const daysInMonth = getDaysInMonth(year, month);
+  // 休場日は文字を入れず、終値の日次行と信用残の日次行(39行目〜)の同じ日を、背景のグレーで塗るだけにする
   const existingValues = sheet.getRange(6, col, daysInMonth, STOCK_COL_WIDTH).getValues();
-  const newValues = existingValues.map(row => row.slice());
   const holidayRowIndexes = [];
 
   for (let d = 1; d <= daysInMonth; d++) {
     const date = new Date(year, month - 1, d);
     if ((date.getDay() === 0 || date.getDay() === 6 || isJapaneseHoliday(date)) && existingValues[d - 1][0] === '') {
-      newValues[d - 1] = [HOLIDAY_LABEL, HOLIDAY_LABEL, HOLIDAY_LABEL];
       holidayRowIndexes.push(d - 1);
     }
   }
-
-  sheet.getRange(6, col, daysInMonth, STOCK_COL_WIDTH).setValues(newValues);
-
-  // 信用残の日次行(39行目〜)にも同じ日に休マークを入れる
-  let marginValues = null;
-  if (sheet.getMaxRows() >= MARGIN_FIRST_ROW + daysInMonth - 1) {
-    marginValues = sheet.getRange(MARGIN_FIRST_ROW, col, daysInMonth, STOCK_COL_WIDTH).getValues();
-    holidayRowIndexes.forEach(i => { if (marginValues[i][0] === '') marginValues[i] = [HOLIDAY_LABEL, HOLIDAY_LABEL, HOLIDAY_LABEL]; });
-    sheet.getRange(MARGIN_FIRST_ROW, col, daysInMonth, STOCK_COL_WIDTH).setValues(marginValues);
-  }
+  const hasMarginRows = sheet.getMaxRows() >= MARGIN_FIRST_ROW + daysInMonth - 1;
 
   // 休場日の背景色は、連続する日をまとめた範囲の一覧にして1回で塗る(範囲ごとにsetBackgroundを呼ばない)
   const a1List = [];
   const colA1 = columnToLetter(col), colEndA1 = columnToLetter(col + STOCK_COL_WIDTH - 1);
   const addRun = (startIdx, endIdx) => {
     a1List.push(colA1 + (6 + startIdx) + ':' + colEndA1 + (6 + endIdx));
-    if (marginValues) a1List.push(colA1 + (MARGIN_FIRST_ROW + startIdx) + ':' + colEndA1 + (MARGIN_FIRST_ROW + endIdx));
+    if (hasMarginRows) a1List.push(colA1 + (MARGIN_FIRST_ROW + startIdx) + ':' + colEndA1 + (MARGIN_FIRST_ROW + endIdx));
   };
   let runStart = -1;
   holidayRowIndexes.forEach((idx, i) => {
@@ -135,7 +125,7 @@ function fillMissingClosesForCode(code, prefetched, knownCol) {
     let price;
 
     if (typeof existingClose === 'number') price = existingClose;
-    else if (existingClose === HOLIDAY_LABEL) continue;
+    else if (existingClose === HOLIDAY_LABEL) continue; // 以前のシートの休場日(今は文字を入れず塗るだけ)
     else {
       const dateStr = Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy-MM-dd');
       const dayData = dataMap[dateStr];
