@@ -331,28 +331,20 @@ function updateDailyClose() {
   const blockWidth = lastCol - 2;
 
   if (holiday) {
+    // 休場日は文字を入れず、背景をグレーで塗るだけにする
     if (blockWidth > 0) {
-      const blockValues = new Array(blockWidth).fill('');
       const blockColors = new Array(blockWidth).fill(null);
       MARKET_VALUE_ITEMS.forEach(item => {
-        for (let k = 0; k < MARKET_VALUE_COL_WIDTH; k++) {
-          blockValues[item.col - 3 + k] = HOLIDAY_LABEL;
-          blockColors[item.col - 3 + k] = HOLIDAY_COLOR;
-        }
+        for (let k = 0; k < MARKET_VALUE_COL_WIDTH; k++) blockColors[item.col - 3 + k] = HOLIDAY_COLOR;
       });
       for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
         if (!codeRow[col - 1]) continue;
-        for (let k = 0; k < STOCK_COL_WIDTH; k++) {
-          blockValues[col - 3 + k] = HOLIDAY_LABEL;
-          blockColors[col - 3 + k] = HOLIDAY_COLOR;
-        }
+        for (let k = 0; k < STOCK_COL_WIDTH; k++) blockColors[col - 3 + k] = HOLIDAY_COLOR;
       }
-      const blockRange = sheet.getRange(targetRow, 3, 1, blockWidth);
-      blockRange.setValues([blockValues]);
-      blockRange.setBackgrounds([blockColors]);
+      sheet.getRange(targetRow, 3, 1, blockWidth).setBackgrounds([blockColors]);
     }
     createNextMonthSheetIfNeeded(year, month, startMs); // 月末が近ければ来月シートを作成/再開(休場日でも実行)
-    return '本日は休場日のため、休マークを入力しました';
+    return '本日は休場日のため、グレーで塗りつぶしました';
   }
 
   const rowValues = sheet.getRange(targetRow, 1, 1, lastCol).getValues()[0];
@@ -613,7 +605,7 @@ function createNextMonthSheetIfNeeded(currentYear, currentMonth, startMs) {
 }
 
 /**
- * 指定した年月の月次シート(例: 11月26年)をテンプレートから作り、日付・曜日・休場マークを入れる。結果のメッセージを返す。
+ * 指定した年月の月次シート(例: 11月26年)をテンプレートから作り、日付・曜日を入れて休場日をグレーで塗る。結果のメッセージを返す。
  * 中断しても安全に再開できる作り(シートが既にあれば作り直さず、未入力の日だけ続きから埋める)。
  */
 function createMonthSheet_(nextYear, nextMonth, startMs) {
@@ -643,7 +635,7 @@ function createMonthSheet_(nextYear, nextMonth, startMs) {
   const lastCol = newSheet.getLastColumn();
   const codeRow = newSheet.getRange(2, 1, 1, lastCol).getValues()[0];
   const maxRows = newSheet.getMaxRows();
-  // 休場マークを入れる列範囲(市場ブロック+登録済み銘柄)。隣り合うブロックは1つの範囲にまとめる
+  // 休場日を塗る列範囲(市場ブロック+登録済み銘柄)。隣り合うブロックは1つの範囲にまとめる
   const colSpans = [];
   const addColSpan = (col, width) => {
     const last = colSpans[colSpans.length - 1];
@@ -656,7 +648,7 @@ function createMonthSheet_(nextYear, nextMonth, startMs) {
   }
 
   // A列(日付)・B列(曜日)は全日分をまとめて書く(処理済みの日も同じ値になるだけ)。
-  // 休場マークは未処理の日だけに入れ、連続する休場日(土日など)は1つの行範囲にまとめる。
+  // 休場日の塗りつぶしは未処理の日だけに行い、連続する休場日(土日など)は1つの行範囲にまとめる。
   const dayLabelCol = [], weekdayCol = [], holidayRuns = [];
   for (let d = 1; d <= daysInMonth; d++) {
     const date = new Date(nextYear, nextMonth - 1, d);
@@ -688,7 +680,7 @@ function createMonthSheet_(nextYear, nextMonth, startMs) {
       colSpans.forEach(s => a1List.push(columnToLetter(s.col) + top + ':' + columnToLetter(s.col + s.width - 1) + bottom));
     });
   });
-  if (a1List.length > 0) newSheet.getRangeList(a1List).setValue(HOLIDAY_LABEL).setBackground(HOLIDAY_COLOR);
+  if (a1List.length > 0) newSheet.getRangeList(a1List).setBackground(HOLIDAY_COLOR); // 文字(休)は入れず、塗りつぶしだけ
 
   blocks.forEach(b => newSheet.getRange(b.firstRow, 1, b.rows, 1).setValues(dayLabelCol.slice(0, b.rows)));
   return newSheetName + ' シートの作成が完了しました';

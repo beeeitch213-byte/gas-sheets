@@ -554,7 +554,7 @@ function mtParseMarginText_(text) {
 // データ元: JPX「銘柄別信用取引残高」(https://www.jpx.co.jp/markets/statistics-equities/margin/01.html)
 //   ・申込日ごとのPDF(YYYYMMDD_mtall.pdf)。2026年10月分から公表開始のため、それより前のデータはない
 //   ・申込日の翌営業日に公表される。一覧ページには直近5日分程度しか載らないので、こまめに取得すること
-// 書き込み先: 各月シートの39行目〜69行目(1日〜31日)。終値と同じく A列=日付・B列=曜日・休場マーク
+// 書き込み先: 各月シートの39行目〜69行目(1日〜31日)。終値と同じく A列=日付・B列=曜日・休場日はグレーで塗る
 //   市場ブロック(C:E・F:H・I:K)に [売残(百万株), 買残(百万株), 信用倍率]、各銘柄(3列)に [売残(千株), 買残(千株), 信用倍率]
 const MARGIN_DATA_START_DATE = new Date(2026, 9, 2); // JPX日次信用残の公表開始(2026/10/2申込分から。月は0始まりなので9=10月)
 
@@ -898,14 +898,13 @@ function updateMarginForSpecificDate(targetDate, onlyCode) {
 
   const dow = targetDate.getDay();
   if ((dow === 0 || dow === 6) || isJapaneseHoliday(targetDate)) {
-    blocks.forEach(b => {
-      for (let k = 0; k < b.width; k++) rowValues[b.col - 1 + k] = HOLIDAY_LABEL;
-    });
+    // 休場日は文字を入れず、背景をグレーで塗るだけにする(A・B列の日付・曜日は入れる)
     if (blocks.length > 0) {
       sheet.getRangeList(blocks.map(b => columnToLetter(b.col) + row + ':' + columnToLetter(b.col + b.width - 1) + row)).setBackground(HOLIDAY_COLOR);
     }
-    sheet.getRange(row, 1, 1, lastCol).setValues([rowValues]);
-    return { status: 'holiday', message: dateStr + ': 休場日のため休マークを入力しました' };
+    // 書くのは日付・曜日だけ(休場日の行は空欄のままなので、毎日の自動更新で何度か通っても行全体を書き直さない)
+    sheet.getRange(row, 1, 1, 2).setValues([rowValues.slice(0, 2)]);
+    return { status: 'holiday', message: dateStr + ': 休場日のためグレーで塗りつぶしました' };
   }
 
   const data = fetchJpxMarginForDate_(dateStr);
@@ -1051,8 +1050,7 @@ function fillMarginForCode(code, knownCol) {
     if (!isMarginBlank_(block[d - 1][0])) continue;
     const dow = date.getDay();
     if ((dow === 0 || dow === 6) || isJapaneseHoliday(date)) {
-      for (let k = 0; k < STOCK_COL_WIDTH; k++) block[d - 1][k] = HOLIDAY_LABEL;
-      fillDayLabels(d - 1, date);
+      fillDayLabels(d - 1, date); // 休場日は文字を入れず、下でグレーに塗るだけ
       holidayRows.push(MARGIN_FIRST_ROW + d - 1);
       continue;
     }

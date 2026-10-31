@@ -72,7 +72,7 @@ const MARKET_VALUE_ITEMS = [
   { code: '1003', name: 'グロース', col: 9 }
 ];
 
-const HOLIDAY_LABEL = '休';
+const HOLIDAY_LABEL = '休'; // 以前は休場日のセルにこの文字を入れていた(今は塗るだけ)。古いシートの判定にだけ使う
 
 const HOLIDAY_COLOR = '#999999';
 

@@ -306,13 +306,17 @@ function reapplyFormatFromTemplateToSheet(sheet, templateSheet) {
   const rawLastCol = sheet.getLastColumn(), codeRow = sheet.getRange(2, 1, 1, rawLastCol).getValues()[0];
   const maxRows = sheet.getMaxRows();
   // 書式コピー元: テンプレートの各ブロックの1日目の行(終値: 6行目 / 信用残: 39行目)。
-  // 休場マーク(休)の行はグレーの背景を残すため対象外にし、それ以外の日の行にだけ1行分の書式を貼る。
+  // 休場日の行(グレーで塗った行。以前のシートは「休」の文字が入った行)は背景を残すため対象外にし、
+  // それ以外の日の行にだけ1行分の書式を貼る。
   function applyRows(firstRow, col, width, srcRange) {
     if (firstRow + 30 > maxRows) return;
-    const vals = sheet.getRange(firstRow, col, 31, width).getValues();
+    const range = sheet.getRange(firstRow, col, 31, 1);
+    const vals = range.getValues();
+    const bgs = range.getBackgrounds();
+    const isHolidayRow = r => vals[r][0] === HOLIDAY_LABEL || String(bgs[r][0]).toLowerCase() === HOLIDAY_COLOR.toLowerCase();
     let bs = -1;
     for (let r = 0; r <= vals.length; r++) {
-      if (r < vals.length && vals[r][0] !== HOLIDAY_LABEL) { if (bs === -1) bs = r; }
+      if (r < vals.length && !isHolidayRow(r)) { if (bs === -1) bs = r; }
       else if (bs !== -1) { srcRange.copyTo(sheet.getRange(firstRow + bs, col, r - bs, width), { formatOnly: true }); bs = -1; }
     }
   }
