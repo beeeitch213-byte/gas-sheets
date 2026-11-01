@@ -70,7 +70,7 @@ function fillHolidayMarksForNewStock(sheet, col) {
 
   for (let d = 1; d <= daysInMonth; d++) {
     const date = new Date(year, month - 1, d);
-    if ((date.getDay() === 0 || date.getDay() === 6 || isJapaneseHoliday(date)) && existingValues[d - 1][0] === '') {
+    if ((date.getDay() === 0 || date.getDay() === 6 || isJpHolidayOrYearEnd_(date)) && existingValues[d - 1][0] === '') {
       holidayRowIndexes.push(d - 1);
     }
   }

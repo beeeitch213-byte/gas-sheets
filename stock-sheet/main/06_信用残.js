@@ -897,7 +897,7 @@ function updateMarginForSpecificDate(targetDate, onlyCode) {
   }
 
   const dow = targetDate.getDay();
-  if ((dow === 0 || dow === 6) || isJapaneseHoliday(targetDate)) {
+  if ((dow === 0 || dow === 6) || isJpHolidayOrYearEnd_(targetDate)) {
     // 休場日は文字を入れず、背景をグレーで塗るだけにする(A・B列の日付・曜日は入れる)
     if (blocks.length > 0) {
       sheet.getRangeList(blocks.map(b => columnToLetter(b.col) + row + ':' + columnToLetter(b.col + b.width - 1) + row)).setBackground(HOLIDAY_COLOR);
@@ -1049,7 +1049,7 @@ function fillMarginForCode(code, knownCol) {
     if (date < MARGIN_DATA_START_DATE) continue;
     if (!isMarginBlank_(block[d - 1][0])) continue;
     const dow = date.getDay();
-    if ((dow === 0 || dow === 6) || isJapaneseHoliday(date)) {
+    if ((dow === 0 || dow === 6) || isJpHolidayOrYearEnd_(date)) {
       fillDayLabels(d - 1, date); // 休場日は文字を入れず、下でグレーに塗るだけ
       holidayRows.push(MARGIN_FIRST_ROW + d - 1);
       continue;

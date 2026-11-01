@@ -2,6 +2,7 @@
 # 事前準備: リポジトリの Settings → Secrets and variables → Actions に
 #   CLASPRC_JSON(手元で clasp login したときの ~/.clasprc.json の中身)を登録しておく。
 # stock-sheet/db は統合前の旧版なので対象外。
+# common/ の共通ファイル(祝日の判定など)は、push の前に両方のプロジェクトへ「共通_<名前>.js」としてコピーする。
 name: Apps Script へ反映 (clasp push)
 
 on:
@@ -10,6 +11,7 @@ on:
     paths:
       - 'stock-sheet/main/**'
       - 'pl-sheet/**'
+      - 'common/**'
   workflow_dispatch: # Actions タブから手動でも実行できる
 
 concurrency:
@@ -41,6 +43,14 @@ jobs:
           fi
           printf '%s' "$CLASPRC_JSON" > ~/.clasprc.json
           chmod 600 ~/.clasprc.json
+
+      - name: 共通ファイルをコピーする(common/*.js → 共通_*.js)
+        working-directory: ${{ matrix.project }}
+        run: |
+          for f in "$GITHUB_WORKSPACE"/common/*.js; do
+            cp "$f" "共通_$(basename "$f")"
+          done
+          ls -1 共通_*.js
 
       - name: clasp push (${{ matrix.project }})
         working-directory: ${{ matrix.project }}
