@@ -2,6 +2,8 @@
 
 損益管理スプレッドシートに紐付く Apps Script プロジェクト。コードは `コード.js` 1 ファイル。リポジトリ全体の決まり(デプロイ、コーディング規約など)はルートの `CLAUDE.md` を参照。
 
+- ルートのコーディング規約のうち、`runLibFromMenu_`・`RUN_TIME_LIMIT_MS`・`withStockColumnLock_` の3つは株式情報(`stock-sheet/main/`)だけの決まりで、pl-sheet には当てはまらない。株式情報とは別の Apps Script プロジェクトなので、これらの関数・定数はこのプロジェクトに無い(使うと実行時に「見つからない」エラーになる)。処理は数秒で終わり、銘柄の列も無い。
+
 ## 機能
 
 - `createNextMonthSheet` — 毎日 1 時台に時間主導トリガーで実行(`TRIGGER_HOUR`)。当月シートが無ければ作り、28 日(`CREATE_NEXT_FROM_DAY`)以降は翌月シートも作る。
