@@ -71,6 +71,10 @@
         box-shadow: inset 4px 0 0 #f4b400; /* 左端の目印 */
         font-weight: bold;
       }
+      /* 選択中の銘柄が検索で当たったときは選択の色を優先する(左端の目印と太字で検索の当たりも分かる) */
+      #sortList li.search-hit.selected {
+        background: #d2e3fc;
+      }
       .tool-group {
         margin-top: 14px;
         padding-top: 10px;
