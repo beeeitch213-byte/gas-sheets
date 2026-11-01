@@ -1,0 +1,3 @@
+# 自動デプロイ(.github/workflows/clasp-push.yml)が common/ からコピーするファイル。元は common/ にあるのでコミットしない
+stock-sheet/main/共通_*.js
+pl-sheet/共通_*.js

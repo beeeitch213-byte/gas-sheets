@@ -690,7 +690,7 @@ function jpxPublishTimeForWeek_(weekMonday) {
   let businessDays = 0;
   for (let i = 0; i < 31; i++) { // 31日は無限ループ防止の上限(実際は数日で見つかる)
     const dow = d.getDay();
-    if (dow !== 0 && dow !== 6 && !isJapaneseHoliday(d)) {
+    if (dow !== 0 && dow !== 6 && !isJpHolidayOrYearEnd_(d)) {
       businessDays++;
       if (businessDays === 4) break;
     }

@@ -3,7 +3,7 @@
  * ------------------------------------------------------------
  * 2026/10にメイン(株式情報)とDB(株式情報_DB、ライブラリStockLib)を1つのプロジェクトに統合した。
  * ファイル構成(Apps Scriptエディタ上で以下の順に並べる。00が先頭である必要がある):
- *   00_設定・共通      シート構成の定数、シート取得・祝日判定・PDF変換などの共通処理
+ *   00_設定・共通      シート構成の定数、シート取得・PDF変換などの共通処理
  *   01_メニュー        「機能」メニュー、各ダイアログの呼び出し口、自動更新トリガーの設定
  *   02_銘柄操作        銘柄の追加・削除・並び替え、色の設定
  *   03_業種            業種情報の取得・設定
@@ -13,6 +13,8 @@
  *   07_空売り集計      空売り集計シート
  *   08_投資部門別      投資部門別売買状況(売買状況シート)
  *   09_チャート        ボタンチャート(ChartDialog)用のデータ組み立て
+ *   10_決算情報        決算情報取得銘柄(決算評価のチャットの担当)
+ *   共通_祝日          祝日(休場日)の判定。損益管理と共通(リポジトリの common/祝日.js を自動デプロイがコピーする)
  *
  * 【セットアップ】
  *  ・左メニュー「サービス」で Drive API と Google Sheets API を有効にする
@@ -131,46 +133,8 @@ function parseDateStr_(dateStr) {
   return new Date(parts[0], parts[1] - 1, parts[2]);
 }
 
-// Googleの「日本の祝日」カレンダーは、ある時期から七夕・節分・七五三・クリスマスのような
-// 国民の祝日ではない行事もイベントとして登録するようになったため、イベントの有無だけで
-// 判定すると7/7(七夕)のような平日を休場日と誤判定してしまう。
-// そのため、実際の「国民の祝日に関する法律」に基づく祝日名(+振替休日)のみを休日として扱う。
-const JP_PUBLIC_HOLIDAY_NAMES_ = [
-  '元日', '成人の日', '建国記念の日', '天皇誕生日', '春分の日', '昭和の日',
-  '憲法記念日', 'みどりの日', 'こどもの日', '海の日', '山の日', '敬老の日',
-  '秋分の日', 'スポーツの日', '体育の日', '文化の日', '勤労感謝の日',
-  '振替休日', '国民の休日'
-];
-
-// 祝日カレンダーの問い合わせは遅いため、1回の実行の中では「月ごとに1回だけ」まとめて取得して使い回す
-const holidayMonthCache_ = {};
-
-function getHolidaySetForMonth_(year, month0) {
-  const key = year + '-' + month0;
-  if (holidayMonthCache_[key]) return holidayMonthCache_[key];
-  const set = {};
-  try {
-    const cal = CalendarApp.getCalendarById('ja.japanese#holiday@group.v.calendar.google.com');
-    const tz = Session.getScriptTimeZone();
-    cal.getEvents(new Date(year, month0, 1), new Date(year, month0 + 1, 1)).forEach(function (e) {
-      if (JP_PUBLIC_HOLIDAY_NAMES_.indexOf(e.getTitle()) === -1) return;
-      const start = e.isAllDayEvent() ? e.getAllDayStartDate() : e.getStartTime();
-      set[Utilities.formatDate(start, tz, 'yyyy-MM-dd')] = true;
-    });
-  } catch (e) {
-    // 取得に失敗した場合は従来どおり「祝日ではない」扱い(年末年始の固定休場日だけは下で判定)
-  }
-  holidayMonthCache_[key] = set;
-  return set;
-}
-
-function isJapaneseHoliday(date) {
-  const month = date.getMonth() + 1;
-  const day = date.getDate();
-  if ((month === 1 && day <= 3) || (month === 12 && day === 31)) return true;
-  const set = getHolidaySetForMonth_(date.getFullYear(), date.getMonth());
-  return !!set[Utilities.formatDate(date, Session.getScriptTimeZone(), 'yyyy-MM-dd')];
-}
+// 祝日(休場日)の判定は、損益管理と共通の「共通_祝日.js」(リポジトリの common/祝日.js)の
+// isJpHolidayOrYearEnd_ / isJpMarketHoliday_ を使う。
 
 /**
  * 株式分割の補正係数を計算する。

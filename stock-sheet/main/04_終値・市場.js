@@ -327,7 +327,7 @@ function updateDailyClose() {
   const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
 
   const dow = today.getDay();
-  const holiday = (dow === 0 || dow === 6) || isJapaneseHoliday(today);
+  const holiday = (dow === 0 || dow === 6) || isJpHolidayOrYearEnd_(today);
   const blockWidth = lastCol - 2;
 
   if (holiday) {
@@ -504,7 +504,7 @@ function updateCloseForSpecificDate(targetDate) {
   const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
 
   const dow = targetDate.getDay();
-  if ((dow === 0 || dow === 6) || isJapaneseHoliday(targetDate)) {
+  if ((dow === 0 || dow === 6) || isJpHolidayOrYearEnd_(targetDate)) {
     return targetDateStr + ': 休場日のためスキップしました';
   }
 
@@ -656,7 +656,7 @@ function createMonthSheet_(nextYear, nextMonth, startMs) {
     dayLabelCol.push([d + '日']);
     weekdayCol.push([MARGIN_WEEKDAY_NAMES_[dow]]);
     if (dayLabels[d - 1][0] !== '') continue; // 前回までに処理済みの日(再開時)
-    if ((dow === 0 || dow === 6) || isJapaneseHoliday(date)) {
+    if ((dow === 0 || dow === 6) || isJpHolidayOrYearEnd_(date)) {
       const last = holidayRuns[holidayRuns.length - 1];
       if (last && last.end === d - 1) last.end = d;
       else holidayRuns.push({ start: d, end: d });

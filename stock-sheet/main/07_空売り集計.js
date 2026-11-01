@@ -301,7 +301,7 @@ function writeShortSellDateToSheet(dateStr, data, skipSparkline) {
  */
 function updateShortSellForDateInput(dateStr, skipSparkline) {
   const dow = parseDateStr_(dateStr).getDay();
-  if (dow === 0 || dow === 6 || isJapaneseHoliday(parseDateStr_(dateStr))) {
+  if (dow === 0 || dow === 6 || isJpHolidayOrYearEnd_(parseDateStr_(dateStr))) {
     const msg = dateStr + ': 休場日のためスキップしました';
     Logger.log(msg);
     return msg;
@@ -413,7 +413,7 @@ function buildShortSellChartSeries(col) {
 /** 時間主導トリガー用: 本日分の空売り集計を更新する */
 function updateShortSellForToday() {
   const today = new Date();
-  if (today.getDay() === 0 || today.getDay() === 6 || isJapaneseHoliday(today)) {
+  if (today.getDay() === 0 || today.getDay() === 6 || isJpHolidayOrYearEnd_(today)) {
     Logger.log('本日は休場日のため空売り集計の更新をスキップしました');
     return;
   }
