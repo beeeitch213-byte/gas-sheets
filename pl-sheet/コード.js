@@ -16,7 +16,6 @@
 const TEMPLATE_SHEET_NAME = 'テンプレ';
 const CREATE_NEXT_FROM_DAY = 28;   // この日以降に翌月シートを作成する
 const TRIGGER_HOUR = 1;            // 毎日の実行時刻(時)
-const HOLIDAY_CAL_ID = 'ja.japanese#holiday@group.v.calendar.google.com';
 const BUILDING_KEY_PREFIX = 'building_';   // 作成途中の印(ドキュメントプロパティ)
 const FIRST_ROW = 4;                       // 1日の行
 const BASE_LAST_ROW = 34;                  // 週間累計行が無いときの31日の行
@@ -439,59 +438,11 @@ function menuApplyWeeklyRows() {
 // ============================================================
 
 /**
- * 営業日かどうかを判定する関数を返す(祝日は月ごとに1回だけ取得してキャッシュ)
- * 休場:土日・祝日・1/2・1/3・12/31
+ * 営業日かどうかを判定する関数を返す
+ * 休場:土日・国民の祝日と休日・1/1〜1/3・12/31。判定は共通ファイル(共通_祝日.js、元は common/祝日.js)の isJpMarketHoliday_
  */
 function makeBusinessChecker_() {
-  const cache = {};
-  return function (date) {
-    const wd = date.getDay();
-    if (wd === 0 || wd === 6) return false;
-
-    const y = date.getFullYear();
-    const m = date.getMonth() + 1;
-    const d = date.getDate();
-    if ((m === 1 && (d === 2 || d === 3)) || (m === 12 && d === 31)) return false;
-
-    const key = y + '-' + m;
-    if (!cache[key]) cache[key] = getHolidayDays_(y, m);
-    return !cache[key].has(d);
-  };
-}
-
-/**
- * 指定月の祝日(日にち)の集合を返す。
- * 祝日カレンダーには「ひな祭り」「七夕」などの記念日も含まれるため、
- * 説明が「祝日」のものだけを対象にする。
- */
-function getHolidayDays_(year, month) {
-  const days = new Set();
-  const cal = CalendarApp.getCalendarById(HOLIDAY_CAL_ID);
-  if (!cal) {
-    console.warn('祝日カレンダーを取得できません。土日・年末年始のみ休場にします。');
-    return days;
-  }
-
-  const events = cal.getEvents(new Date(year, month - 1, 1), new Date(year, month, 1));
-  const used = [];
-  const skipped = [];
-
-  events.forEach(ev => {
-    const title = ev.getTitle();
-    const start = ev.isAllDayEvent() ? ev.getAllDayStartDate() : ev.getStartTime();
-    if (start.getFullYear() !== year || start.getMonth() !== month - 1) return;
-
-    if (String(ev.getDescription()).indexOf('祝日') !== -1) {
-      days.add(start.getDate());
-      used.push(start.getDate() + '日 ' + title);
-    } else {
-      skipped.push(start.getDate() + '日 ' + title);
-    }
-  });
-
-  console.log(month + '月 休場にした祝日: ' + (used.join(', ') || 'なし'));
-  console.log(month + '月 除外した記念日: ' + (skipped.join(', ') || 'なし'));
-  return days;
+  return date => !isJpMarketHoliday_(date);
 }
 
 // ============================================================
