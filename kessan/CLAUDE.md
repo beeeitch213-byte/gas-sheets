@@ -133,7 +133,8 @@
 
 ## コード修正(株式情報のスプレッドシート)
 
-- このチャットで `stock-sheet/` を直したときは、ブランチ `claude/wonderful-maxwell-3is538` に commit・push し、PR を作って **マージまで自動で行う**(マスターの了承済み)。
+- このチャットの担当は「決算情報取得銘柄」機能(`stock-sheet/main/10_決算情報.js`、`KessanTargetDialog.html`、`01_メニュー.js` の「決算情報取得銘柄」の項目)と「決算情報」ファイル、`kessan/` だけ(ルートの `CLAUDE.md` の「チャット(セッション)の分担」)。それ以外の株式情報の修正を頼まれたら、引き受けずに株式情報のチャットに頼むようマスターに伝える。
+- 担当の範囲を直したときは、ブランチ `claude/wonderful-maxwell-3is538` に commit・push し、PR を作って **マージまで自動で行う**(マスターの了承済み)。
 - マージ後、Actions「Apps Script へ反映 (clasp push)」の成功を確認して報告する。
 - ブランチの PR がマージ済みなら、次の修正の前に最新の main からブランチを作り直す。
 - これまでの PR: [#34](https://github.com/beeeitch213-byte/gas-sheets/pull/34)(並び替えダイアログで選択の色を優先)、[#35](https://github.com/beeeitch213-byte/gas-sheets/pull/35)(決算情報取得銘柄ダイアログの「キャンセル」→「閉じる」)。
