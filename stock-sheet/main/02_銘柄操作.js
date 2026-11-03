@@ -22,39 +22,86 @@ function checkStockCodeExists(code) {
   return { exists: false };
 }
 
-function addChangeConditionalFormat(sheet, changeCol) {
-  const colors = getColorSettings();
-  const range = sheet.getRange(columnToLetter(changeCol) + '6:' + columnToLetter(changeCol) + '36');
-  const rules = sheet.getConditionalFormatRules();
+// ==== 条件付き書式(前日比・信用倍率の色) ====
+// 前日比(6〜36行目)は3つ、信用倍率(39〜69行目)は4段階のルールを、それぞれ市場ブロックと全銘柄の列をまとめた1つのルールで持つ。
+// (以前は銘柄を足すたびに1銘柄分のルールを足していたため、同じ中身のルールが銘柄の数だけ増え、範囲も重なっていた)
+// このルール以外(手で作ったルールなど)は変えずに残す。色は「色の設定」(getColorSettings)で変えられる。
 
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(0.0001).setFontColor(colors.changeUpColor).setRanges([range]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThanOrEqualTo(-0.0001).setFontColor(colors.changeDownColor).setRanges([range]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberBetween(-0.0001, 0.0001).setFontColor(colors.changeFlatColor).setRanges([range]).build());
-  sheet.setConditionalFormatRules(rules);
+/** 前日比の列と信用倍率の列(市場ブロック+登録済みの銘柄)を返す */
+function getStockColorCols_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
+  const changeCols = MARKET_VALUE_ITEMS.map(item => item.col + MARKET_CHANGE_OFFSET);
+  const ratioCols = MARKET_VALUE_ITEMS.map(item => item.col + 2);
+  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
+    if (!codeRow[col - 1]) continue;
+    changeCols.push(col + 1);
+    ratioCols.push(col + 2);
+  }
+  return { changeCols: changeCols, ratioCols: ratioCols };
 }
 
-function addMarginRatioConditionalFormat(sheet, ratioCol) {
-  const colors = getColorSettings();
-  const range = sheet.getRange(columnToLetter(ratioCol) + MARGIN_FIRST_ROW + ':' + columnToLetter(ratioCol) + (MARGIN_FIRST_ROW + 30));
-  const rules = sheet.getConditionalFormatRules();
-
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(1).setFontColor(colors.ratioHighColor).setRanges([range]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThan(1).setFontColor(colors.ratioLowColor).setRanges([range]).build());
-  sheet.setConditionalFormatRules(rules);
+/** 前日比・信用倍率の色のルール(この仕組みで作る・作っていたもの)なら true。範囲がすべて前日比か信用倍率の1列の中にあるもの */
+function isStockColorRule_(rule, cols) {
+  if (!rule.getBooleanCondition()) return false;
+  const ranges = rule.getRanges();
+  if (ranges.length === 0) return false;
+  const changeSet = {}, ratioSet = {};
+  cols.changeCols.forEach(c => { changeSet[c] = true; });
+  cols.ratioCols.forEach(c => { ratioSet[c] = true; });
+  return ranges.every(rg => rg.getColumn() === rg.getLastColumn() && (
+    (changeSet[rg.getColumn()] && rg.getRow() >= CLOSE_FIRST_ROW && rg.getLastRow() <= CLOSE_FIRST_ROW + 30) ||
+    (ratioSet[rg.getColumn()] && rg.getRow() >= MARGIN_FIRST_ROW && rg.getLastRow() <= MARGIN_FIRST_ROW + 30)));
 }
 
-/** 新しい銘柄の前日比列と信倍率列の条件付き書式を、1回の読み書きでまとめて追加する */
-function addStockConditionalFormats_(sheet, changeCol, ratioCol) {
+/** 前日比の3つ・信用倍率の4段階のルールを作る(どれも対象の全列を1つのルールにまとめる) */
+function buildStockColorRules_(sheet, cols) {
   const colors = getColorSettings();
-  const changeRange = sheet.getRange(columnToLetter(changeCol) + '6:' + columnToLetter(changeCol) + '36');
-  const ratioRange = sheet.getRange(columnToLetter(ratioCol) + MARGIN_FIRST_ROW + ':' + columnToLetter(ratioCol) + (MARGIN_FIRST_ROW + 30));
-  const rules = sheet.getConditionalFormatRules();
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(0.0001).setFontColor(colors.changeUpColor).setRanges([changeRange]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThanOrEqualTo(-0.0001).setFontColor(colors.changeDownColor).setRanges([changeRange]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberBetween(-0.0001, 0.0001).setFontColor(colors.changeFlatColor).setRanges([changeRange]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(1).setFontColor(colors.ratioHighColor).setRanges([ratioRange]).build());
-  rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThan(1).setFontColor(colors.ratioLowColor).setRanges([ratioRange]).build());
-  sheet.setConditionalFormatRules(rules);
+  const changeRanges = cols.changeCols.map(c => sheet.getRange(CLOSE_FIRST_ROW, c, 31, 1));
+  const ratioRanges = cols.ratioCols.map(c => sheet.getRange(MARGIN_FIRST_ROW, c, 31, 1));
+  const rule = () => SpreadsheetApp.newConditionalFormatRule();
+  return [
+    rule().whenNumberGreaterThanOrEqualTo(0.0001).setFontColor(colors.changeUpColor).setRanges(changeRanges).build(),
+    rule().whenNumberLessThanOrEqualTo(-0.0001).setFontColor(colors.changeDownColor).setRanges(changeRanges).build(),
+    rule().whenNumberBetween(-0.0001, 0.0001).setFontColor(colors.changeFlatColor).setRanges(changeRanges).build(),
+    // 信用倍率は上から順に当てはめる(先に当てはまったルールの色になる): 10以上 → 5以上 → 1以上 → 1未満
+    rule().whenNumberGreaterThanOrEqualTo(10).setFontColor(colors.ratioTier10Color).setRanges(ratioRanges).build(),
+    rule().whenNumberGreaterThanOrEqualTo(5).setFontColor(colors.ratioTier5Color).setRanges(ratioRanges).build(),
+    rule().whenNumberGreaterThanOrEqualTo(1).setFontColor(colors.ratioTier1Color).setRanges(ratioRanges).build(),
+    rule().whenNumberLessThan(1).setFontColor(colors.ratioTierLowColor).setRanges(ratioRanges).build()
+  ];
+}
+
+const STOCK_COLOR_RULE_COUNT = 7; // buildStockColorRules_ が作るルールの数
+
+/**
+ * 前日比・信用倍率の色のルールを、まとめた形に作り直す(それ以外のルールは残す)。
+ * onlyIfNeeded=true なら、すでにまとめた形で全列にかかっているときは何もしない(毎日の更新から呼ぶとき用)。
+ * 結果のメッセージを返す。
+ */
+function rebuildStockColorRules_(sheet, onlyIfNeeded) {
+  const cols = getStockColorCols_(sheet);
+  const existing = sheet.getConditionalFormatRules();
+  const managed = existing.filter(r => isStockColorRule_(r, cols));
+  if (onlyIfNeeded && managed.length === STOCK_COLOR_RULE_COUNT) {
+    const fullCols = rules => {
+      const set = {};
+      rules.forEach(r => r.getRanges().forEach(rg => {
+        if (rg.getRow() === CLOSE_FIRST_ROW || rg.getRow() === MARGIN_FIRST_ROW) { if (rg.getNumRows() === 31) set[rg.getColumn()] = true; }
+      }));
+      return set;
+    };
+    const covered = fullCols(managed);
+    if (cols.changeCols.concat(cols.ratioCols).every(c => covered[c])) return sheet.getName() + ': 整理済み';
+  }
+  const others = existing.filter(r => !isStockColorRule_(r, cols));
+  sheet.setConditionalFormatRules(buildStockColorRules_(sheet, cols).concat(others));
+  return sheet.getName() + ': 前日比・信用倍率のルール ' + managed.length + '件 → ' + STOCK_COLOR_RULE_COUNT + '件(ほかのルール ' + others.length + '件はそのまま)';
+}
+
+/** 銘柄を足したときに呼ぶ。足した銘柄の列も含めて、前日比・信用倍率のルールを作り直す */
+function addStockConditionalFormats_(sheet) {
+  rebuildStockColorRules_(sheet, false);
 }
 
 function fillHolidayMarksForNewStock(sheet, col) {
@@ -347,7 +394,7 @@ function addStockColumnToSheet(sheet, code, name, industry) {
     sheet.getRange(MARGIN_HEADER_ROW, newCol, 1, STOCK_COL_WIDTH).setValues([['売残', '買残', '信倍率']]);
   }
 
-  try { addStockConditionalFormats_(sheet, newCol + 1, newCol + 2); } catch (e) {}
+  try { addStockConditionalFormats_(sheet); } catch (e) {}
 
   return newCol;
 }
@@ -619,37 +666,25 @@ function getCurrentStockOrder() {
 }
 
 // ==== 色の設定 ====
+/** 「色の設定」の保存・「条件付き書式を整理」: テンプレートと当月シートの前日比・信用倍率のルールを、まとめた形に作り直す */
 function reapplyColorSettingsToAllSheets() {
-  const ss = SpreadsheetApp.getActiveSpreadsheet(), colors = getColorSettings();
-  [ss.getSheetByName(TEMPLATE_SHEET_NAME), getTargetSheet(new Date())].filter(s => s).forEach(sheet => {
-    sheet.setConditionalFormatRules([]);
-    const sheetLastCol = sheet.getLastColumn();
-    const codeRow = sheet.getRange(2, 1, 1, sheetLastCol).getValues()[0], rules = [];
-    // 前日比の列と信用倍率の列: 市場ブロックは[出来高,売買代金,前日比]/[売残,買残,信倍率]、銘柄は[終値,前日比,売買代金]/[売残,買残,信倍率]
-    const targets = MARKET_VALUE_ITEMS.map(item => ({ changeCol: item.col + MARKET_CHANGE_OFFSET, ratioCol: item.col + 2 }));
-    for (let col = STOCK_START_COL; col <= sheetLastCol; col += STOCK_COL_WIDTH) {
-      if (codeRow[col - 1]) targets.push({ changeCol: col + 1, ratioCol: col + 2 });
-    }
-    const marginLastRow = MARGIN_FIRST_ROW + 30;
-    targets.forEach(t => {
-      const cRng = sheet.getRange(columnToLetter(t.changeCol) + '6:' + columnToLetter(t.changeCol) + '36'), rRng = sheet.getRange(columnToLetter(t.ratioCol) + MARGIN_FIRST_ROW + ':' + columnToLetter(t.ratioCol) + marginLastRow);
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(0.0001).setFontColor(colors.changeUpColor).setRanges([cRng]).build());
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThanOrEqualTo(-0.0001).setFontColor(colors.changeDownColor).setRanges([cRng]).build());
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberBetween(-0.0001, 0.0001).setFontColor(colors.changeFlatColor).setRanges([cRng]).build());
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberGreaterThanOrEqualTo(1).setFontColor(colors.ratioHighColor).setRanges([rRng]).build());
-      rules.push(SpreadsheetApp.newConditionalFormatRule().whenNumberLessThan(1).setFontColor(colors.ratioLowColor).setRanges([rRng]).build());
-    });
-    sheet.setConditionalFormatRules(rules);
-  });
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  const sheets = [ss.getSheetByName(TEMPLATE_SHEET_NAME), getTargetSheet(new Date())].filter(s => s);
+  return sheets.map(sheet => rebuildStockColorRules_(sheet, false)).join(' / ');
 }
 
 function getColorSettings() {
   const saved = PropertiesService.getScriptProperties().getProperty('COLOR_SETTINGS');
-  return saved ? Object.assign({ changeUpColor: '#ff0000', changeDownColor: '#4a90d9', changeFlatColor: '#000000', ratioHighColor: '#ff0000', ratioLowColor: '#6495ed' }, JSON.parse(saved)) : { changeUpColor: '#ff0000', changeDownColor: '#4a90d9', changeFlatColor: '#000000', ratioHighColor: '#ff0000', ratioLowColor: '#6495ed' };
+  // 信用倍率は4段階(10以上・5以上・1以上・1未満)。既定の色は、当月シートで使っていた4段階のルールの色
+  const defaults = {
+    changeUpColor: '#ff0000', changeDownColor: '#4a90d9', changeFlatColor: '#000000',
+    ratioTier10Color: '#ff0000', ratioTier5Color: '#ff9900', ratioTier1Color: '#4a86e8', ratioTierLowColor: '#0000ff'
+  };
+  return Object.assign(defaults, saved ? JSON.parse(saved) : {});
 }
 
 function saveColorSettings(s) { PropertiesService.getScriptProperties().setProperty('COLOR_SETTINGS', JSON.stringify(s)); }
 
 function saveAndApplyColorSettings(s) { saveColorSettings(s); return reapplyColorSettingsToAllSheets(); }
 
-function colorSettingsUI() { SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutputFromFile('ColorSettingsDialog').setWidth(600).setHeight(750), '色の設定'); }
+function colorSettingsUI() { SpreadsheetApp.getUi().showModalDialog(HtmlService.createHtmlOutputFromFile('ColorSettingsDialog').setWidth(600).setHeight(900), '色の設定'); }

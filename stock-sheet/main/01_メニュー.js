@@ -28,6 +28,7 @@ function addStockMenu() {
     .addSubMenu(ui.createMenu('データ修正')
       .addItem('データベースを全銘柄分初期構築', 'runInitializeDatabaseFromMenu')
       .addItem('基準セルの書式を全銘柄に再適用', 'runReapplyFormatsFromMenu')
+      .addItem('条件付き書式を整理(前日比・信用倍率)', 'runTidyConditionalFormatsFromMenu')
       .addItem('スパークラインを全シートで再設定(#REF!復旧用)', 'runReapplyAllSparklineFormulasFromMenu')
       .addSeparator()
       .addItem('市場別売買代金レイアウトを設定', 'runSetupMarketValueLayoutFromMenu')
@@ -126,6 +127,11 @@ function runUpdateJpxStatsForDateFromDialog(startDateStr, endDateStr, forceRefet
 
 function runReapplyFormatsFromMenu() {
   runLibFromMenu_(() => reapplyAllFormatsFromTemplate(), '基準セルの書式を再適用しました', '処理に失敗しました');
+}
+
+/** 「条件付き書式を整理」: テンプレートと当月シートの前日比・信用倍率の色のルールを、まとめた形に作り直す(ほかのルールは残す) */
+function runTidyConditionalFormatsFromMenu() {
+  runLibFromMenu_(() => reapplyColorSettingsToAllSheets(), '条件付き書式を整理しました', '整理に失敗しました');
 }
 
 /** 「次月シートを作成」: 毎日の更新では月末の6日前から自動で作るが、それより前に作りたいとき用 */

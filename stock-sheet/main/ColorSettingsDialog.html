@@ -85,15 +85,25 @@
 
     <div class="section-title">信用倍率の色</div>
     <div class="row">
-      <label>1.0以上</label>
-      <input type="color" id="ratioHighColor">
+      <label>10以上</label>
+      <input type="color" id="ratioTier10Color">
     </div>
-    <div class="palette" data-target="ratioHighColor"></div>
+    <div class="palette" data-target="ratioTier10Color"></div>
     <div class="row">
-      <label>1.0未満</label>
-      <input type="color" id="ratioLowColor">
+      <label>5以上10未満</label>
+      <input type="color" id="ratioTier5Color">
     </div>
-    <div class="palette" data-target="ratioLowColor"></div>
+    <div class="palette" data-target="ratioTier5Color"></div>
+    <div class="row">
+      <label>1以上5未満</label>
+      <input type="color" id="ratioTier1Color">
+    </div>
+    <div class="palette" data-target="ratioTier1Color"></div>
+    <div class="row">
+      <label>1未満</label>
+      <input type="color" id="ratioTierLowColor">
+    </div>
+    <div class="palette" data-target="ratioTierLowColor"></div>
 
     <div id="statusMsg"></div>
 
@@ -135,8 +145,10 @@
             document.getElementById('changeUpColor').value = settings.changeUpColor;
             document.getElementById('changeDownColor').value = settings.changeDownColor;
             document.getElementById('changeFlatColor').value = settings.changeFlatColor;
-            document.getElementById('ratioHighColor').value = settings.ratioHighColor;
-            document.getElementById('ratioLowColor').value = settings.ratioLowColor;
+            document.getElementById('ratioTier10Color').value = settings.ratioTier10Color;
+            document.getElementById('ratioTier5Color').value = settings.ratioTier5Color;
+            document.getElementById('ratioTier1Color').value = settings.ratioTier1Color;
+            document.getElementById('ratioTierLowColor').value = settings.ratioTierLowColor;
           })
           .getColorSettings();
       });
@@ -146,8 +158,10 @@
           changeUpColor: document.getElementById('changeUpColor').value,
           changeDownColor: document.getElementById('changeDownColor').value,
           changeFlatColor: document.getElementById('changeFlatColor').value,
-          ratioHighColor: document.getElementById('ratioHighColor').value,
-          ratioLowColor: document.getElementById('ratioLowColor').value
+          ratioTier10Color: document.getElementById('ratioTier10Color').value,
+          ratioTier5Color: document.getElementById('ratioTier5Color').value,
+          ratioTier1Color: document.getElementById('ratioTier1Color').value,
+          ratioTierLowColor: document.getElementById('ratioTierLowColor').value
         };
 
         const statusMsg = document.getElementById('statusMsg');
