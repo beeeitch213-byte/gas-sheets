@@ -11,11 +11,21 @@ const INDUSTRY_STORAGE_ABBREVIATIONS = {
   'その他（33業種外）': 'その他'
 };
 
-/** 保存用の省略形→空売り集計シートの業種ブロックが使っているフル名(上の逆引き) */
+/**
+ * Yahoo!ファイナンスの業種名(銘柄の業種セルにそのまま入る)のうち、東証33業種の正式名(空売り集計シートの業種ブロック名)と
+ * 表記が違うもの。Yahoo側→正式名。
+ */
+const INDUSTRY_YAHOO_LABEL_ALIASES = {
+  '情報・通信': '情報・通信業',
+  '電気・ガス': '電気・ガス業',
+  '証券業': '証券、商品先物取引業'
+};
+
+/** 業種セルの表記(保存用の省略形・Yahoo の表記)→空売り集計シートの業種ブロックが使っているフル名 */
 const INDUSTRY_LABEL_ALIASES = Object.keys(INDUSTRY_STORAGE_ABBREVIATIONS).reduce((map, fullLabel) => {
   map[INDUSTRY_STORAGE_ABBREVIATIONS[fullLabel]] = fullLabel;
   return map;
-}, {});
+}, Object.assign({}, INDUSTRY_YAHOO_LABEL_ALIASES));
 
 /**
  * HTML本文から業種名を抜き出す。
