@@ -26,11 +26,18 @@ const SHORT_SELL_COLUMN_BLOCKS = [{ label: '日次集計', col: 3 }].concat(
   SHORT_SELL_INDUSTRIES.map((ind, i) => ({ label: ind.label, col: 5 + i * 2 }))
 );
 
-/** 銘柄の業種セルの文字列(省略形の場合あり)から、空売り集計シートの対応する業種ブロックを探す */
+/**
+ * 銘柄の業種セルの文字列(省略形・Yahoo の表記の場合あり)から、空売り集計シートの対応する業種ブロックを探す。
+ * 完全一致・別名(INDUSTRY_LABEL_ALIASES)で見つからなければ、末尾の「業」の有無などの表記ゆれを前方一致で探す。
+ */
 function resolveShortSellBlockForIndustry_(industryLabel) {
-  if (!industryLabel) return null;
-  const fullLabel = INDUSTRY_LABEL_ALIASES[industryLabel] || industryLabel;
-  return SHORT_SELL_COLUMN_BLOCKS.find(b => b.label === fullLabel) || null;
+  const label = String(industryLabel || '').trim();
+  if (!label) return null;
+  const fullLabel = INDUSTRY_LABEL_ALIASES[label] || label;
+  const exact = SHORT_SELL_COLUMN_BLOCKS.find(b => b.label === fullLabel);
+  if (exact) return exact;
+  const prefixed = SHORT_SELL_COLUMN_BLOCKS.filter(b => b.label !== '日次集計' && b.label.indexOf(label) === 0);
+  return prefixed.length === 1 ? prefixed[0] : null; // 候補が複数(例: 「その他」)なら決めない
 }
 
 /**

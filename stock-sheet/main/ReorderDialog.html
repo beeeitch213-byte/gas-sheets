@@ -379,6 +379,7 @@
         const s = String(industry || '').trim();
         if (!s) return INDUSTRY_ORDER.length + 1;                     // 業種が空欄の銘柄は最後
         if (s === 'その他' || s.indexOf('33業種外') !== -1) return INDUSTRY_ORDER.length; // その他(33業種外)
+        if (s === '証券業') return INDUSTRY_ORDER.indexOf('証券、商品先物取引業'); // Yahoo の表記
         const exact = INDUSTRY_ORDER.indexOf(s);
         if (exact !== -1) return exact;
         const prefix = INDUSTRY_ORDER.findIndex(function(name) { return name.indexOf(s) === 0 || s.indexOf(name) === 0; });
