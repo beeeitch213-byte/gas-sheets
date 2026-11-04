@@ -358,7 +358,7 @@ function addStockColumnToSheet(sheet, code, name, industry, options) {
   const lastCol = sheet.getLastColumn();
   const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
 
-  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
+  for (let col = stockStartColOf_(sheet); col <= lastCol; col += STOCK_COL_WIDTH) { // 昔のレイアウトはI列から
     if (String(codeRow[col - 1]) === String(code)) return null;
   }
 
@@ -422,7 +422,7 @@ function deleteStockColumnFromSheet(sheet, code) {
   if (lastCol < 3) return false;
   const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
 
-  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
+  for (let col = stockStartColOf_(sheet); col <= lastCol; col += STOCK_COL_WIDTH) { // 昔のレイアウトはI列から
     if (String(codeRow[col - 1]) === String(code)) {
       sheet.deleteColumns(col, STOCK_COL_WIDTH);
       normalizeBufferColumns(sheet);
@@ -519,10 +519,11 @@ function getReorderPayloadForSheet(sheet, orderedCodes) {
   const lastCol = sheet.getLastColumn();
   const lastRow = Math.max(sheet.getLastRow(), SHEET_DATA_MAX_ROW);
   if (lastCol < 3) return null;
+  const startCol = stockStartColOf_(sheet); // 昔のレイアウトはI列から
 
   const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
   const blocks = [];
-  for (let col = STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
+  for (let col = startCol; col <= lastCol; col += STOCK_COL_WIDTH) {
     if (codeRow[col - 1]) blocks.push({ code: String(codeRow[col - 1]), startCol: col });
   }
 
@@ -548,15 +549,15 @@ function getReorderPayloadForSheet(sheet, orderedCodes) {
   for (let i = 0; i < blocks.length; i++) {
     const code = orderSet[i];
     if (!headerBlocks[code]) continue;
-    const targetCol = STOCK_START_COL + i * STOCK_COL_WIDTH;
+    const targetCol = startCol + i * STOCK_COL_WIDTH;
     headerValues.forEach((row, r) => headerBlocks[code][r].forEach((v, k) => { row[targetCol - 1 + k] = v; }));
     bodyValues.forEach((row, r) => bodyBlocks[code][r].forEach((v, k) => { row[targetCol - 1 + k] = v; }));
   }
 
   const changed = getReorderChangedRange_(currentCodes, orderSet, code => !!headerBlocks[code]);
   if (!changed) return { status: sheet.getName() + ': スキップ(変更なし)' };
-  const firstCol = STOCK_START_COL + changed.first * STOCK_COL_WIDTH;
-  const endCol = STOCK_START_COL + (changed.last + 1) * STOCK_COL_WIDTH - 1;
+  const firstCol = startCol + changed.first * STOCK_COL_WIDTH;
+  const endCol = startCol + (changed.last + 1) * STOCK_COL_WIDTH - 1;
   const pickCols = rows => sanitizeRowsForApi(rows.map(row => row.slice(firstCol - 1, endCol)));
   const colRange = (fromRow, toRow) => "'" + sheet.getName() + "'!" + columnToLetter(firstCol) + fromRow + ':' + columnToLetter(endCol) + toRow;
 
