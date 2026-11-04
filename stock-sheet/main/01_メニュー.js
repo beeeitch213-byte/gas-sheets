@@ -29,6 +29,7 @@ function addStockMenu() {
       .addItem('データベースを全銘柄分初期構築', 'runInitializeDatabaseFromMenu')
       .addItem('基準セルの書式を全銘柄に再適用', 'runReapplyFormatsFromMenu')
       .addItem('条件付き書式を整理(前日比・信用倍率)', 'runTidyConditionalFormatsFromMenu')
+      .addItem('過去のシートを当月に合わせる', 'runPastSheetSyncFromMenu')
       .addItem('スパークラインを全シートで再設定(#REF!復旧用)', 'runReapplyAllSparklineFormulasFromMenu')
       .addSeparator()
       .addItem('市場別売買代金レイアウトを設定', 'runSetupMarketValueLayoutFromMenu')

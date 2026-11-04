@@ -143,8 +143,8 @@ function fillHolidayMarksForNewStock(sheet, col) {
  * 当月シートの不足分の終値・前日比・売買代金を埋める(新規銘柄追加時用)
  * 取得自体はfetchHistoricalClosesで行う
  */
-function fillMissingClosesForCode(code, prefetched, knownCol) {
-  const sheet = getTargetSheet(new Date());
+function fillMissingClosesForCode(code, prefetched, knownCol, targetSheet) {
+  const sheet = targetSheet || getTargetSheet(new Date()); // targetSheet: 過去の月次シートに埋めるとき用(省略時は当月シート)
   if (!sheet || !parseYearMonthFromSheetName(sheet.getName())) return;
   const {year, month} = parseYearMonthFromSheetName(sheet.getName());
   let targetCol = knownCol || null; // 銘柄追加の直後は列が分かっているので、2行目を読み直さない
@@ -197,9 +197,9 @@ function fillMissingClosesForCode(code, prefetched, knownCol) {
  * 当月シートの不足分の信用残・信用倍率を埋める(新規銘柄追加時用)
  * JPXの日次信用残PDFを日ごとに読むため時間がかかることがある。途中で止まった分は毎日の自動更新で埋まる。
  */
-function fillMissingMarginForCode(code, knownCol) {
+function fillMissingMarginForCode(code, knownCol, targetSheet, startMs) {
   try {
-    return fillMarginForCode(code, knownCol);
+    return fillMarginForCode(code, knownCol, targetSheet, startMs);
   } catch (e) {
     Logger.log('信用残の補完に失敗(' + code + '): ' + e);
     return '';
@@ -281,7 +281,19 @@ function withStockColumnLock_(actionLabel, fn) {
 
 function addNewStockFromDialog(code, name) {
   withStockColumnLock_('銘柄を追加', () => addNewStock(code, name));
-  return '銘柄コード ' + code + '(' + name + ')を追加しました';
+  return '銘柄コード ' + code + '(' + name + ')を追加しました' + startPastSheetSyncAfter_('銘柄 ' + code + '(' + name + ')を追加しました');
+}
+
+/**
+ * 銘柄の追加・削除・並び替え(当月・テンプレート)が終わったあとに呼ぶ: 過去の月次シートを合わせる処理を始め、小さなダイアログを開く。
+ * 戻り値はメッセージに付け足す文(始められなかったときは理由)。
+ */
+function startPastSheetSyncAfter_(currentMessage) {
+  try {
+    return startPastSheetSyncWithDialog_(currentMessage) ? '(過去のシートはバックグラウンドで合わせます)' : '';
+  } catch (e) {
+    return '(過去のシートを合わせる処理を始められませんでした: ' + e.message + ')';
+  }
 }
 
 /**
@@ -453,7 +465,8 @@ function deleteStockUI() {
 /** DeleteStockDialogの「削除する」から呼ばれる。選んだ銘柄を順に削除し、結果をまとめて返す */
 function deleteStocksFromDialog(codes) {
   if (!codes || codes.length === 0) throw new Error('削除する銘柄が選ばれていません');
-  return withStockColumnLock_('銘柄を削除', () => codes.map(code => deleteStock(String(code))).join('\n'));
+  const message = withStockColumnLock_('銘柄を削除', () => codes.map(code => deleteStock(String(code))).join('\n'));
+  return message + startPastSheetSyncAfter_(codes.length + '銘柄を削除しました');
 }
 
 function normalizeBufferColumns(sheet) {
@@ -608,7 +621,9 @@ function getReorderPayloadForDatabase(dbSheet, orderedCodes) {
  * 全シート分のペイロードをSheets APIで一括更新(要:サービスでGoogle Sheets API有効化)
  */
 function reorderBothSheets(orderedCodes) {
-  return withStockColumnLock_('並び替え', () => reorderBothSheetsUnlocked_(orderedCodes));
+  const message = withStockColumnLock_('並び替え', () => reorderBothSheetsUnlocked_(orderedCodes));
+  if (message.indexOf('並び替え完了') === -1) return message; // 変更なし・失敗のときは過去のシートを触らない
+  return message + startPastSheetSyncAfter_('当月の並び替えが終わりました');
 }
 
 function reorderBothSheetsUnlocked_(orderedCodes) {
