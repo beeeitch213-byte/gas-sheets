@@ -1,7 +1,8 @@
 // ==== 過去の月次シートを当月に合わせる(バックグラウンド処理) ====
 // 当月シートの銘柄(と並び順)に、ほかの月次シート(過去の月・作成済みの次月)を合わせる。
-//  ・当月に無い銘柄の列は削除する(その月のデータも消える)
+//  ・当月に無い銘柄の列は削除する(その月のデータも消える)。同じ銘柄の列が2つ以上あれば1つにする
 //  ・当月にあって無い銘柄は列を足し、終値・前日比・売買代金(Yahoo)と信用残(ドライブの日次データ)を埋める
+//  ・終値が抜けている銘柄(以前の実行で取れなかったなど)も、空いているセルだけ埋め直す
 //  ・当月と同じ順番に並べる
 // 銘柄の追加・削除・並び替えのあと(当月・テンプレートの処理が終わったら)と、「データ修正」メニューから始める。
 // 処理は時間主導トリガー(1回きり)で進め、時間切れ(RUN_TIME_LIMIT_MS)になったら続きを予約し直す。
@@ -213,8 +214,9 @@ function syncSheetToCurrentLayout_(sheet, order, state, startMs, historyCache) {
   const wanted = order.map(o => o.code);
   const timeUp = () => Date.now() - startMs > RUN_TIME_LIMIT_MS;
 
-  // 1. 当月に無い銘柄の列を削除する
+  // 1. 当月に無い銘柄の列と、同じ銘柄が2つ以上ある列(終値が多く入っている方を残す)を削除する
   readStockBlocks_(sheet).filter(b => wanted.indexOf(b.code) === -1).forEach(b => deleteStockColumnFromSheet(sheet, b.code));
+  deleteDuplicateStockBlocks_(sheet);
 
   // 2. 足りない銘柄の列を右端に足す(中身は 3. で埋める)
   const have = readStockBlocks_(sheet).map(b => b.code);
@@ -232,22 +234,24 @@ function syncSheetToCurrentLayout_(sheet, order, state, startMs, historyCache) {
     }
   }
 
-  // 3. 足した銘柄の終値・前日比・売買代金と信用残を埋める
-  const pending = state.pendingFill.filter(p => p.sheet === sheetName);
-  for (const p of pending) {
+  // 3. 足した銘柄と、終値が抜けている銘柄の終値・前日比・売買代金と信用残を埋める
+  // (以前の実行で終値を取れなかった銘柄も、ここで埋め直す。埋められるのは空いているセルだけ)
+  const targets = state.pendingFill.filter(p => p.sheet === sheetName).map(p => p.code);
+  findStocksMissingCloses_(sheet).forEach(code => { if (targets.indexOf(code) === -1) targets.push(code); });
+  for (const code of targets) {
     if (timeUp()) return false;
-    const block = readStockBlocks_(sheet).find(b => b.code === p.code);
+    const block = readStockBlocks_(sheet).find(b => b.code === code);
     if (block) {
-      if (!historyCache[p.code]) {
-        const today = new Date(), start = new Date(today);
-        start.setFullYear(start.getFullYear() - DB_BACKFILL_YEARS);
-        historyCache[p.code] = fetchHistoricalCloses(p.code, start, today) || { dateMap: {}, splits: [] };
+      const history = getHistoryForPastSync_(code, historyCache, state);
+      if (history === null) return false; // 取得に失敗した。少し待ってから、次の実行で取り直す
+      if (history) fillMissingClosesForCode(code, history, block.col, sheet);
+      // 昔のレイアウトの信用残は週ごとなので埋めない(ドライブの日次データも、その頃の分は無い)
+      if (layout === 'current') {
+        const marginMessage = fillMissingMarginForCode(code, block.col, sheet, startMs);
+        if (String(marginMessage).indexOf('途中まで') !== -1) return false;
       }
-      fillMissingClosesForCode(p.code, historyCache[p.code], block.col, sheet);
-      const marginMessage = fillMissingMarginForCode(p.code, block.col, sheet, startMs);
-      if (String(marginMessage).indexOf('途中まで') !== -1) return false;
     }
-    state.pendingFill = state.pendingFill.filter(x => !(x.sheet === p.sheet && x.code === p.code));
+    state.pendingFill = state.pendingFill.filter(x => !(x.sheet === sheetName && x.code === code));
     if (!savePastSyncStateIfCurrent_(state)) return false; // やり直しになった
   }
 
@@ -263,6 +267,74 @@ function syncSheetToCurrentLayout_(sheet, order, state, startMs, historyCache) {
   if (layout === 'old') rebuildOldLayoutColorRules_(sheet);
   else rebuildStockColorRules_(sheet, true); // まとまっていれば何もしない
   return true;
+}
+
+const PAST_SYNC_FETCH_MAX_FAILURES = 3; // 1銘柄の終値の取得に、続けてこの回数失敗したらあきらめる
+
+/**
+ * 同じ銘柄の列が2つ以上あれば、終値が多く入っている方(同じなら左側)を残して、ほかを削除する。削除した数を返す。
+ * (並び替えは銘柄コードで列の中身を入れ替えるため、同じ銘柄が2つあると、片方の中身で上書きされてしまう)
+ */
+function deleteDuplicateStockBlocks_(sheet) {
+  const byCode = {};
+  readStockBlocks_(sheet).forEach(b => (byCode[b.code] = byCode[b.code] || []).push(b));
+  const dropCols = [];
+  Object.keys(byCode).forEach(code => {
+    const list = byCode[code];
+    if (list.length < 2) return;
+    const counts = list.map(b => sheet.getRange(6, b.col, 31, 1).getValues().filter(r => typeof r[0] === 'number').length);
+    let keep = 0;
+    counts.forEach((n, i) => { if (n > counts[keep]) keep = i; });
+    list.forEach((b, i) => { if (i !== keep) dropCols.push(b.col); });
+  });
+  dropCols.sort((a, b) => b - a).forEach(col => sheet.deleteColumns(col, STOCK_COL_WIDTH)); // 右から消して、左の列の位置をずらさない
+  if (dropCols.length > 0) normalizeBufferColumns(sheet);
+  return dropCols.length;
+}
+
+/**
+ * 終値が抜けている銘柄のコードを返す。今日より前の営業日で、終値のセルが空のものがある銘柄。
+ * どの銘柄にも終値が入っていない日(シート全体で取れなかった日)は見ない(全銘柄を取りに行かないように)。
+ * 上場前の日も抜けとして数えるが、取りに行っても埋まらないだけ(1回の実行で1銘柄1回しか取りに行かない)。
+ */
+function findStocksMissingCloses_(sheet) {
+  const ym = parseYearMonthFromSheetName(sheet.getName());
+  if (!ym) return [];
+  const blocks = readStockBlocks_(sheet);
+  if (blocks.length === 0) return [];
+  const days = getDaysInMonth(ym.year, ym.month);
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const values = sheet.getRange(6, 1, days, sheet.getLastColumn()).getValues();
+  const rows = [];
+  for (let d = 1; d <= days; d++) {
+    const date = new Date(ym.year, ym.month - 1, d);
+    if (date >= todayStart) break;
+    if (isJpMarketHoliday_(date)) continue;
+    if (blocks.some(b => typeof values[d - 1][b.col - 1] === 'number')) rows.push(d - 1);
+  }
+  return blocks.filter(b => rows.some(r => values[r][b.col - 1] === '')).map(b => b.code);
+}
+
+/**
+ * 過去のシートを埋めるための日次チャート(3年分)。1回の実行の中では1銘柄1回だけ取りに行く。
+ * 戻り値: 取れたらチャート / 取れず、あとで取り直すなら null / 何度も取れずにあきらめたら false
+ */
+function getHistoryForPastSync_(code, historyCache, state) {
+  if (historyCache[code] !== undefined) return historyCache[code];
+  state.fetchFailures = state.fetchFailures || {};
+  if ((state.fetchFailures[code] || 0) >= PAST_SYNC_FETCH_MAX_FAILURES) return (historyCache[code] = false);
+  const today = new Date(), start = new Date(today);
+  start.setFullYear(start.getFullYear() - DB_BACKFILL_YEARS);
+  const history = fetchHistoricalCloses(code, start, today);
+  if (history) {
+    delete state.fetchFailures[code];
+    return (historyCache[code] = history);
+  }
+  state.fetchFailures[code] = (state.fetchFailures[code] || 0) + 1;
+  if (state.fetchFailures[code] < PAST_SYNC_FETCH_MAX_FAILURES) return null;
+  state.errors.push(code + ': 終値を取得できませんでした(埋められなかった日があります)');
+  return (historyCache[code] = false);
 }
 
 // ==== 昔のレイアウトの月次シートの修理(1回だけ使う) ====
