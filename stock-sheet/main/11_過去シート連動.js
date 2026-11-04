@@ -36,11 +36,21 @@ function savePastSyncStateIfCurrent_(state) {
   return true;
 }
 
-/** 当月シート以外の月次シート(新しい月から順) */
+/**
+ * 今のレイアウト(市場ブロックが3列×3でC・F・I列から、銘柄はL列から、信用残は毎日)なら true。
+ * 2026/9 以前の月次シートは昔のレイアウト(市場ブロックが2列×3でC・E・G列から、銘柄はI列から、信用残は週ごと)で、
+ * 列の位置を前提にする処理(過去のシートを合わせる・スパークラインの再設定・条件付き書式の作り直し)はしない。
+ */
+function isCurrentLayoutSheet_(sheet) {
+  const row = sheet.getRange(2, 1, 1, STOCK_START_COL).getValues()[0];
+  return MARKET_VALUE_ITEMS.every(item => String(row[item.col - 1]) === String(item.code));
+}
+
+/** 当月シート以外の、今のレイアウトの月次シート(新しい月から順) */
 function listOtherMonthSheets_(ss, currentSheet) {
   return ss.getSheets()
     .map(s => ({ sheet: s, ym: parseYearMonthFromSheetName(s.getName()) }))
-    .filter(x => x.ym && (!currentSheet || x.sheet.getName() !== currentSheet.getName()))
+    .filter(x => x.ym && (!currentSheet || x.sheet.getName() !== currentSheet.getName()) && isCurrentLayoutSheet_(x.sheet))
     .sort((a, b) => (b.ym.year * 12 + b.ym.month) - (a.ym.year * 12 + a.ym.month))
     .map(x => x.sheet);
 }
@@ -175,6 +185,7 @@ function runPastSheetSync() {
  * order: 当月シートの銘柄 [{code, name, industry}](並び順)
  */
 function syncSheetToCurrentLayout_(sheet, order, state, startMs, historyCache) {
+  if (!isCurrentLayoutSheet_(sheet)) return true; // 昔のレイアウトのシートは触らない
   const sheetName = sheet.getName();
   const wanted = order.map(o => o.code);
   const timeUp = () => Date.now() - startMs > RUN_TIME_LIMIT_MS;
@@ -223,4 +234,117 @@ function syncSheetToCurrentLayout_(sheet, order, state, startMs, historyCache) {
   // 5. 前日比・信用倍率の条件付き書式をまとめる(まとまっていれば何もしない)
   rebuildStockColorRules_(sheet, true);
   return true;
+}
+
+// ==== 昔のレイアウトの月次シートの修理(1回だけ使う) ====
+// 2026/11/4 に、昔のレイアウトのシートを今のレイアウトとして扱ってしまい、次のように崩れたのを直す。
+//  ・9・8・7月26年: L列に、I列と同じ銘柄(285A)の写しの列が増えた(I列からの銘柄をL列からと読み違え、足りないと判断したため)
+//  ・9・8・7月26年: 前日比・信用倍率の条件付き書式が、今のレイアウトの列に付いた
+//  ・4〜9月26年: 4行目のスパークラインが今のレイアウトの位置に入り、市場ブロック(E・G列)と1銘柄目(I列)がずれた
+//  ・9・8・7月26年で足した銘柄: 信用残の欄(昔は週ごと)に、毎日の休場日の位置でグレーが塗られた
+// 何度実行しても同じ結果になる。
+
+const OLD_LAYOUT_MARKET_ITEMS = [ // 昔のレイアウトの市場ブロック(2列: 売買代金・前日比)
+  { code: '1001', col: 3 }, { code: '1002', col: 5 }, { code: '1003', col: 7 }
+];
+
+const OLD_LAYOUT_STOCK_START_COL = 9; // 昔のレイアウトの銘柄はI列から(3列単位は同じ)
+
+/** 昔のレイアウトの銘柄 [{code, col}](並び順) */
+function readOldLayoutStockBlocks_(sheet) {
+  const lastCol = sheet.getLastColumn();
+  if (lastCol < OLD_LAYOUT_STOCK_START_COL) return [];
+  const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
+  const blocks = [];
+  for (let col = OLD_LAYOUT_STOCK_START_COL; col <= lastCol; col += STOCK_COL_WIDTH) {
+    if (codeRow[col - 1]) blocks.push({ code: String(codeRow[col - 1]), col: col });
+  }
+  return blocks;
+}
+
+/** 前日比・信用倍率の色のルールらしいもの(数値の条件で、範囲がすべて日次の行か信用残の行の1列の中) */
+function isStockColorLikeRule_(rule) {
+  const cond = rule.getBooleanCondition();
+  if (!cond) return false;
+  const T = SpreadsheetApp.BooleanCriteria;
+  const types = [T.NUMBER_GREATER_THAN_OR_EQUAL_TO, T.NUMBER_LESS_THAN_OR_EQUAL_TO, T.NUMBER_BETWEEN, T.NUMBER_LESS_THAN];
+  if (types.indexOf(cond.getCriteriaType()) === -1) return false;
+  return rule.getRanges().every(rg => rg.getColumn() === rg.getLastColumn() && (
+    (rg.getRow() >= CLOSE_FIRST_ROW && rg.getLastRow() <= CLOSE_FIRST_ROW + 30) ||
+    (rg.getRow() >= MARGIN_FIRST_ROW && rg.getLastRow() <= MARGIN_FIRST_ROW + 30)));
+}
+
+/** 範囲の値がすべて空なら true */
+function isRangeBlank_(range) {
+  return range.getValues().every(row => row.every(v => v === '' || v === null));
+}
+
+/** 1枚の昔のレイアウトのシートを直す。結果のメッセージを返す */
+function repairOldLayoutSheet_(sheet) {
+  const ym = parseYearMonthFromSheetName(sheet.getName());
+  const notes = [];
+
+  // 1. 1銘柄目(I列)と同じ銘柄がL列にあれば、L列の方を消す。
+  //    I列が元からある列(休場日に「休」が入っている)、L列は 11/4 の処理が足した写し(同じ終値をYahooから入れ直したもの)。
+  //    それ以外の重なりは、どちらが元か分からないので消さずに知らせる。
+  const first = readOldLayoutStockBlocks_(sheet);
+  if (first.length >= 2 && first[0].col === OLD_LAYOUT_STOCK_START_COL && first[1].col === OLD_LAYOUT_STOCK_START_COL + STOCK_COL_WIDTH &&
+      first[0].code === first[1].code) {
+    sheet.deleteColumns(first[1].col, STOCK_COL_WIDTH);
+    notes.push(first[1].code + 'の写しの列(L列)を削除');
+  }
+  const counts = {};
+  readOldLayoutStockBlocks_(sheet).forEach(b => { counts[b.code] = (counts[b.code] || 0) + 1; });
+  Object.keys(counts).filter(c => counts[c] > 1).forEach(c => notes.push('⚠️' + c + 'が' + counts[c] + 'つある(消さずに残した)'));
+
+  const blocks = readOldLayoutStockBlocks_(sheet);
+
+  // 2. 前日比・信用倍率の条件付き書式を、昔のレイアウトの列で作り直す(ほかのルールは残す)
+  const cols = {
+    changeCols: OLD_LAYOUT_MARKET_ITEMS.map(m => m.col + 1).concat(blocks.map(b => b.col + 1)),
+    ratioCols: blocks.map(b => b.col + 2) // 昔のレイアウトの信用残(週ごと)は銘柄だけ
+  };
+  const rules = sheet.getConditionalFormatRules();
+  const others = rules.filter(r => !isStockColorLikeRule_(r));
+  sheet.setConditionalFormatRules(buildStockColorRules_(sheet, cols).concat(others));
+  notes.push('条件付き書式 ' + (rules.length - others.length) + '件 → ' + STOCK_COLOR_RULE_COUNT + '件');
+
+  // 3. 4行目のスパークラインを、昔のレイアウトの位置に入れ直す
+  const dbSheet = getOrCreateDatabaseSheet();
+  // A・B列(「チャート」など)は触らず、C列から右を作り直す(ずれて入った数式は消す)
+  const lastCol = sheet.getLastColumn();
+  const formulas = new Array(lastCol - 2).fill('');
+  if (ym) {
+    OLD_LAYOUT_MARKET_ITEMS.forEach(m => {
+      formulas[m.col - 3] = buildMarketValueSparklineFormula(columnToLetter(getOrCreateDatabaseColumn(dbSheet, m.code)), ym.year, ym.month);
+    });
+  }
+  blocks.forEach(b => { formulas[b.col - 3] = buildSparklineFormula(columnToLetter(getOrCreateDatabaseColumn(dbSheet, b.code))); });
+  sheet.getRange(4, 3, 1, lastCol - 2).setFormulas([formulas]);
+  notes.push('スパークライン ' + (blocks.length + OLD_LAYOUT_MARKET_ITEMS.length) + '件');
+
+  // 4. 信用残の欄が空の銘柄は、毎日の休場日の位置で塗られたグレーを消す(昔の信用残は週ごとなので、日ごとの塗りは要らない)
+  let cleared = 0;
+  blocks.forEach(b => {
+    const range = sheet.getRange(MARGIN_FIRST_ROW, b.col, 31, STOCK_COL_WIDTH);
+    if (!isRangeBlank_(range)) return;
+    const gray = range.getBackgrounds().some(row => row.some(c => String(c).toLowerCase() === HOLIDAY_COLOR.toLowerCase()));
+    if (gray) { range.setBackground(null); cleared++; }
+  });
+  if (cleared > 0) notes.push('信用残の欄のグレーを消した銘柄 ' + cleared);
+
+  return sheet.getName() + ': ' + notes.join('、');
+}
+
+/** 「データ修正 → 昔のレイアウトのシートを修理」: 昔のレイアウトの月次シートをすべて直す */
+function repairOldLayoutSheets() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  // 止めたままになっている「過去のシートを合わせる」処理の状態を片付ける(昔のレイアウトのシートは、もう対象にしない)
+  deletePastSyncTriggers_();
+  const state = readPastSyncState_();
+  if (state && state.running) { state.running = false; state.queue = []; writePastSyncState_(state); }
+
+  const targets = ss.getSheets().filter(s => parseYearMonthFromSheetName(s.getName()) && !isCurrentLayoutSheet_(s));
+  if (targets.length === 0) return '昔のレイアウトの月次シートはありません';
+  return targets.map(s => repairOldLayoutSheet_(s)).join('\n');
 }

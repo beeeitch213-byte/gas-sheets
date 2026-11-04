@@ -257,6 +257,7 @@ function setMarketValueSparklines_(sheet, year, month) {
  */
 function reapplySparklineFormulas(sheet) {
   if (!sheet) return 'シートが見つかりません';
+  if (!isCurrentLayoutSheet_(sheet)) return sheet.getName() + ': 昔のレイアウトのためスキップ'; // 列の位置が違う(repairOldLayoutSheets で直す)
   const lastCol = sheet.getLastColumn();
   if (lastCol < 3) return sheet.getName() + ': スキップ';
 

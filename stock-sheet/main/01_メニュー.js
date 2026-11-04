@@ -30,6 +30,7 @@ function addStockMenu() {
       .addItem('基準セルの書式を全銘柄に再適用', 'runReapplyFormatsFromMenu')
       .addItem('条件付き書式を整理(前日比・信用倍率)', 'runTidyConditionalFormatsFromMenu')
       .addItem('過去のシートを当月に合わせる', 'runPastSheetSyncFromMenu')
+      .addItem('昔のレイアウトのシートを修理(2026/9以前)', 'runRepairOldLayoutSheetsFromMenu')
       .addItem('スパークラインを全シートで再設定(#REF!復旧用)', 'runReapplyAllSparklineFormulasFromMenu')
       .addSeparator()
       .addItem('市場別売買代金レイアウトを設定', 'runSetupMarketValueLayoutFromMenu')
@@ -133,6 +134,11 @@ function runReapplyFormatsFromMenu() {
 /** 「条件付き書式を整理」: テンプレートと当月シートの前日比・信用倍率の色のルールを、まとめた形に作り直す(ほかのルールは残す) */
 function runTidyConditionalFormatsFromMenu() {
   runLibFromMenu_(() => reapplyColorSettingsToAllSheets(), '条件付き書式を整理しました', '整理に失敗しました');
+}
+
+/** 「昔のレイアウトのシートを修理」: 2026/11/4 に崩れた、昔のレイアウトの月次シートを直す(11_過去シート連動.js) */
+function runRepairOldLayoutSheetsFromMenu() {
+  runLibFromMenu_(() => repairOldLayoutSheets(), '昔のレイアウトのシートを修理しました', '修理に失敗しました');
 }
 
 /** 「次月シートを作成」: 毎日の更新では月末の6日前から自動で作るが、それより前に作りたいとき用 */
