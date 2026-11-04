@@ -3,6 +3,7 @@
 //  ・当月に無い銘柄の列は削除する(その月のデータも消える)。同じ銘柄の列が2つ以上あれば1つにする
 //  ・当月にあって無い銘柄は列を足し、終値・前日比・売買代金(Yahoo)と信用残(ドライブの日次データ)を埋める
 //  ・終値・前日比が抜けている銘柄(以前の実行で取れなかったなど)も、空いているセルだけ埋め直す
+//  ・昔のレイアウトのシートは、週ごとの信用残の空いているセルも埋める(Yahoo!ファイナンスの信用残時系列から)
 //  ・当月と同じ順番に並べる
 // 銘柄の追加・削除・並び替えのあと(当月・テンプレートの処理が終わったら)と、「データ修正」メニューから始める。
 // 処理は時間主導トリガー(1回きり)で進め、時間切れ(RUN_TIME_LIMIT_MS)になったら続きを予約し直す。
@@ -255,6 +256,16 @@ function syncSheetToCurrentLayout_(sheet, order, state, startMs, historyCache) {
     if (!savePastSyncStateIfCurrent_(state)) return false; // やり直しになった
   }
 
+  // 3b. 昔のレイアウトの、週ごとの信用残(38行目〜)の抜けを埋める
+  // (ここで失敗しても、並び替えなどの続きは進める)
+  if (layout === 'old') {
+    try {
+      if (!fillOldLayoutWeeklyMargin_(sheet, state, startMs)) return false; // 時間切れ・取得失敗(次の実行で続きから)
+    } catch (e) {
+      state.errors.push(sheetName + ': 週の信用残を埋められませんでした(' + e.message + ')');
+    }
+  }
+
   // 4. 当月と同じ順番に並べる(並び替えと同じ方法: 列の位置はそのままで中身を入れ替える)
   const result = getReorderPayloadForSheet(sheet, wanted);
   if (result && result.payloads) {
@@ -337,6 +348,194 @@ function getHistoryForPastSync_(code, historyCache, state) {
   if (state.fetchFailures[code] < PAST_SYNC_FETCH_MAX_FAILURES) return null;
   state.errors.push(code + ': 終値を取得できませんでした(埋められなかった日があります)');
   return (historyCache[code] = false);
+}
+
+// ==== 昔のレイアウトの信用残(週ごと)を埋める ====
+// 2026/9 以前は JPX の信用残が週1回(金曜時点、第2営業日に公表)だったため、昔のレイアウトのシートは
+// 38行目=見出し、39行目〜=1週1行(A列=その週の日付)。その月に公表された週を並べる(例: 9月26年は 8/28〜9/25 の5週)。
+// JPX にはもう当時のファイルが無いので、Yahoo!ファイナンスの「信用残時系列」(1ページ20週)から取る。
+// 単位は今のレイアウトと同じ千株(整数)、信用倍率は買残÷売残(小数第2位まで、売残が0なら「---」)。空いているセルだけ埋める。
+
+const WEEKLY_MARGIN_URL_PREFIX = 'https://finance.yahoo.co.jp/quote/';
+
+const WEEKLY_MARGIN_MAX_PAGES = 4; // 1ページ20週。2026/4 からなら2ページで足りる
+
+const WEEKLY_MARGIN_CACHE_PREFIX = 'WEEKLY_MARGIN_'; // 取得結果を6時間キャッシュする(ほかのシートでも使い回すため)
+
+const WEEKLY_MARGIN_MAX_FAIL_STREAK = 5; // 続けてこの数の銘柄で取得に失敗したら、今回の処理では週の信用残をあきらめる
+
+const OLD_LAYOUT_MARGIN_MAX_WEEKS = 6; // 1か月に入る週の数の上限(39〜44行目)
+
+/** その週の最後の営業日(金曜。休場なら前の営業日) */
+function weeklyMarginWeekEnd_(friday) {
+  const d = new Date(friday);
+  for (let i = 0; i < 5 && isJpMarketHoliday_(d); i++) d.setDate(d.getDate() - 1);
+  return d;
+}
+
+/** その日より後の、n番目の営業日 */
+function nthBusinessDayAfter_(date, n) {
+  const d = new Date(date);
+  let count = 0;
+  while (count < n) {
+    d.setDate(d.getDate() + 1);
+    if (!isJpMarketHoliday_(d)) count++;
+  }
+  return d;
+}
+
+/** その月(year, month)に公表された週の日付(週の最後の営業日)。古い順 */
+function oldLayoutMarginWeeksOf_(year, month) {
+  const weeks = [];
+  const d = new Date(year, month - 1, 1);
+  d.setDate(d.getDate() - 14);
+  while (d.getDay() !== 5) d.setDate(d.getDate() + 1); // 金曜まで進める
+  for (; d <= new Date(year, month, 0); d.setDate(d.getDate() + 7)) {
+    const weekEnd = weeklyMarginWeekEnd_(d);
+    const published = nthBusinessDayAfter_(weekEnd, 2);
+    if (published.getFullYear() === year && published.getMonth() === month - 1) weeks.push(weekEnd);
+  }
+  return weeks;
+}
+
+/**
+ * 昔のレイアウトのシートの週の行を返す [{row, key: 'yyyy-MM-dd'}]。A列に日付が無ければ、公表日から決めて書き込む。
+ * あわせて見出し(38行目)を銘柄の列にそろえる(2026/7 以前のシートは見出しがC列から始まっていて、銘柄と2つずれていた)。
+ */
+function ensureOldLayoutMarginWeeks_(sheet, blocks) {
+  const ym = parseYearMonthFromSheetName(sheet.getName());
+  if (!ym) return [];
+  const range = sheet.getRange(MARGIN_FIRST_ROW, 1, OLD_LAYOUT_MARGIN_MAX_WEEKS, 1);
+  let dates = range.getValues().map(r => r[0]).filter(v => v instanceof Date);
+  if (dates.length === 0) {
+    dates = oldLayoutMarginWeeksOf_(ym.year, ym.month);
+    if (dates.length === 0) return [];
+    sheet.getRange(MARGIN_FIRST_ROW, 1, dates.length, 1).setValues(dates.map(d => [d])).setNumberFormat('m"月"d"日"');
+  }
+
+  if (blocks.length > 0) {
+    const lastCol = blocks[blocks.length - 1].col + STOCK_COL_WIDTH - 1;
+    const head = sheet.getRange(MARGIN_HEADER_ROW, 3, 1, lastCol - 2).getValues()[0]; // C列から
+    const want = head.map((v, i) => (i + 3 < OLD_LAYOUT_STOCK_START_COL) ? '' : ['売残', '買残', '信倍率'][(i + 3 - OLD_LAYOUT_STOCK_START_COL) % STOCK_COL_WIDTH]);
+    if (head.some((v, i) => v !== want[i])) sheet.getRange(MARGIN_HEADER_ROW, 3, 1, want.length).setValues([want]);
+  }
+  return dates.map((d, i) => ({ row: MARGIN_FIRST_ROW + i, key: Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy-MM-dd') }));
+}
+
+/**
+ * Yahoo!ファイナンスの信用残時系列を取る。{'yyyy-MM-dd': [売残, 買残](株)}。oldestKey の週まで(ページをめくって)取る。
+ * 取れなければ null(ページが開けない・表が見つからない)。信用取引の無い銘柄・上場前は {} になる。
+ */
+function fetchWeeklyMarginHistory_(code, oldestKey) {
+  const result = {};
+  for (let page = 1; page <= WEEKLY_MARGIN_MAX_PAGES; page++) {
+    const url = WEEKLY_MARGIN_URL_PREFIX + encodeURIComponent(code) + '.T/history?styl=margin&page=' + page;
+    let html = null;
+    for (let attempt = 0; attempt < 2 && html === null; attempt++) {
+      if (attempt > 0) Utilities.sleep(1500);
+      try {
+        const res = UrlFetchApp.fetch(url, { muteHttpExceptions: true, headers: { 'User-Agent': 'Mozilla/5.0' } });
+        if (res.getResponseCode() === 200) html = res.getContentText('UTF-8');
+      } catch (e) {}
+    }
+    if (html === null) return page === 1 ? null : result;
+    if (page === 1 && html.indexOf('信用倍率') === -1) return null; // ページの作りが変わった
+
+    let oldest = null, rows = 0;
+    (html.match(/<tr[^>]*>[\s\S]*?<\/tr>/g) || []).forEach(tr => {
+      const cells = (tr.match(/<t[hd][^>]*>[\s\S]*?<\/t[hd]>/g) || []).map(c => c.replace(/<[^>]+>/g, '').trim());
+      const m = cells.length >= 3 && cells[0].match(/^(\d{4})\/(\d{1,2})\/(\d{1,2})$/);
+      if (!m) return;
+      const key = m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2);
+      const sell = Number(cells[1].replace(/,/g, '')), buy = Number(cells[2].replace(/,/g, ''));
+      rows++;
+      if (!oldest || key < oldest) oldest = key;
+      if (cells[1] !== '' && cells[2] !== '' && isFinite(sell) && isFinite(buy)) result[key] = [sell, buy];
+    });
+    if (rows === 0 || (oldest && oldest <= oldestKey)) break;
+    Utilities.sleep(300);
+  }
+  return result;
+}
+
+/** 週の信用残(キャッシュがあれば使う)。取れなければ null(あとで取り直す)/ 今回はあきらめるなら false */
+function getWeeklyMarginForPastSync_(code, oldestKey, state) {
+  if (state.weeklyMarginOff) return false;
+  const cache = CacheService.getScriptCache(), cacheKey = WEEKLY_MARGIN_CACHE_PREFIX + code;
+  try {
+    const cached = JSON.parse(cache.get(cacheKey) || 'null');
+    if (cached && cached.oldest <= oldestKey) return cached.data;
+  } catch (e) {}
+  const data = fetchWeeklyMarginHistory_(code, oldestKey);
+  if (data) {
+    state.weeklyFailStreak = 0;
+    try { cache.put(cacheKey, JSON.stringify({ oldest: oldestKey, data: data }), 21600); } catch (e) {}
+    return data;
+  }
+  state.weeklyFailStreak = (state.weeklyFailStreak || 0) + 1;
+  if (state.weeklyFailStreak >= WEEKLY_MARGIN_MAX_FAIL_STREAK) {
+    state.weeklyMarginOff = true;
+    state.errors.push('Yahoo!ファイナンスから週の信用残を取得できませんでした(昔のレイアウトの信用残は埋めていません)');
+    return false;
+  }
+  return null;
+}
+
+/**
+ * 昔のレイアウトのシートの、週の信用残の空いているセルを埋める。最後まで終われば true、時間切れ・取り直しなら false。
+ * 一度も取れなかった銘柄は、3回目の実行であきらめる(エラーに出す)。
+ */
+function fillOldLayoutWeeklyMargin_(sheet, state, startMs) {
+  const blocks = readStockBlocks_(sheet);
+  const weeks = ensureOldLayoutMarginWeeks_(sheet, blocks);
+  if (weeks.length === 0 || blocks.length === 0) return true;
+  const lastCol = blocks[blocks.length - 1].col + STOCK_COL_WIDTH - 1;
+  const values = sheet.getRange(MARGIN_FIRST_ROW, 1, weeks.length, lastCol).getValues();
+  const blank = v => v === '' || v === null;
+  const needs = blocks.filter(b => weeks.some((w, i) => blank(values[i][b.col - 1]) || blank(values[i][b.col])));
+  const oldestKey = weeks[0].key;
+  state.weeklyFailures = state.weeklyFailures || {};
+
+  const data = [];
+  const flush = () => {
+    if (data.length === 0) return;
+    Sheets.Spreadsheets.Values.batchUpdate({ valueInputOption: 'RAW', data: data.splice(0) }, SpreadsheetApp.getActiveSpreadsheet().getId());
+  };
+  let retryLater = false;
+  for (const b of needs) {
+    if (Date.now() - startMs > RUN_TIME_LIMIT_MS) { flush(); return false; }
+    if ((state.weeklyFailures[b.code] || 0) >= PAST_SYNC_FETCH_MAX_FAILURES) continue;
+    const history = getWeeklyMarginForPastSync_(b.code, oldestKey, state);
+    if (history === false) break; // 今回はあきらめる
+    if (history === null) {
+      state.weeklyFailures[b.code] = (state.weeklyFailures[b.code] || 0) + 1;
+      if (state.weeklyFailures[b.code] >= PAST_SYNC_FETCH_MAX_FAILURES) state.errors.push(b.code + ': 週の信用残を取得できませんでした');
+      else retryLater = true;
+      continue;
+    }
+    delete state.weeklyFailures[b.code];
+    let changed = false;
+    const rows = weeks.map((w, i) => {
+      const cur = values[i].slice(b.col - 1, b.col + 2);
+      const pair = history[w.key];
+      if (!pair || !(blank(cur[0]) || blank(cur[1]))) return cur;
+      changed = true;
+      return [marginUnitValue_(pair[0], false), marginUnitValue_(pair[1], false), pair[0] > 0 ? Math.round(pair[1] / pair[0] * 100) / 100 : '---'];
+    });
+    if (changed) {
+      const a1 = "'" + sheet.getName() + "'!" + columnToLetter(b.col) + weeks[0].row + ':' + columnToLetter(b.col + 2) + weeks[weeks.length - 1].row;
+      data.push({ range: a1, values: rows });
+      if (data.length >= 20) flush();
+    }
+  }
+  flush();
+  if (needs.length > 0) {
+    // 数値の表示形式(千株は整数、信用倍率は小数第2位まで)を銘柄の列にそろえる
+    const width = lastCol - OLD_LAYOUT_STOCK_START_COL + 1;
+    const formatRow = Array.from({ length: width }, (_, i) => (i % STOCK_COL_WIDTH === 2) ? '#,##0.00' : '#,##0');
+    sheet.getRange(MARGIN_FIRST_ROW, OLD_LAYOUT_STOCK_START_COL, weeks.length, width).setNumberFormats(weeks.map(() => formatRow));
+  }
+  return !retryLater;
 }
 
 // ==== 昔のレイアウトの月次シートの修理(1回だけ使う) ====
