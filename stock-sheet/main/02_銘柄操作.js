@@ -186,12 +186,20 @@ function fillMissingClosesForCode(code, prefetched, knownCol, targetSheet) {
     }
 
     if (!existingChange) {
-      let prevClose = prevCloseTracker !== null ? prevCloseTracker : (d === 1 ? (Object.keys(dataMap).sort().reverse().find(dStr => dStr < Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy-MM-dd')) ? dataMap[Object.keys(dataMap).sort().reverse().find(dStr => dStr < Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy-MM-dd'))].close : null) : null);
+      // この月にまだ終値が無ければ(1日が休場日の月の最初の営業日など)、取得したデータで前の営業日の終値を探す
+      const prevClose = prevCloseTracker !== null ? prevCloseTracker : findPrevCloseInDataMap_(dataMap, date);
       if (prevClose) newValues[rowIndex][1] = price / prevClose - 1;
     }
     prevCloseTracker = price;
   }
   sheet.getRange(6, targetCol, daysInMonth, STOCK_COL_WIDTH).setValues(newValues);
+}
+
+/** 日次チャート(dateMap)で、date より前の最後の日の終値(無ければ null) */
+function findPrevCloseInDataMap_(dataMap, date) {
+  const dateStr = Utilities.formatDate(date, 'Asia/Tokyo', 'yyyy-MM-dd');
+  const prev = Object.keys(dataMap).filter(k => k < dateStr).sort().pop();
+  return prev ? dataMap[prev].close : null;
 }
 
 /**
