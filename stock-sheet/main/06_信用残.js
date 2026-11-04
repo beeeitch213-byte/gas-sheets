@@ -967,15 +967,18 @@ function updateMarginData() {
 }
 
 /**
- * 新規銘柄追加時用: 当月の1日〜前日までの、その銘柄の信用残を埋める(入力済みの日・休場日はそのまま)。
- * 時間がかかる場合は途中で止まり、残りは毎日の自動更新または日付入力更新で埋まる。
+ * 新規銘柄追加時用: その月の1日〜前日までの、その銘柄の信用残を埋める(入力済みの日・休場日はそのまま)。
+ * 時間がかかる場合は途中で止まり、残りは毎日の自動更新または日付入力更新で埋まる(戻り値に「途中まで」が入る)。
+ * targetSheet: 過去の月次シートに埋めるとき用(省略時は当月シート。過去の月はその月の末日まで、先の月は何もしない)。
+ * startMs: 時間切れの判定に使う開始時刻(呼び出し元の実行と合わせるとき用。省略時は今)。
  */
-function fillMarginForCode(code, knownCol) {
-  const startMs = Date.now();
+function fillMarginForCode(code, knownCol, targetSheet, startMs) {
+  startMs = startMs || Date.now();
   const today = new Date();
   today.setHours(0, 0, 0, 0);
-  const sheet = getTargetSheet(today);
+  const sheet = targetSheet || getTargetSheet(today);
   if (!sheet) return '当月シートが見つかりません';
+  const ym = parseYearMonthFromSheetName(sheet.getName()) || { year: today.getFullYear(), month: today.getMonth() + 1 };
   let targetCol = knownCol || null; // 銘柄追加の直後は列が分かっているので、2行目を読み直さない
   if (!targetCol) {
     const lastCol = sheet.getLastColumn();
@@ -984,7 +987,9 @@ function fillMarginForCode(code, knownCol) {
   }
   if (!targetCol) return '銘柄が見つかりません: ' + code;
 
-  const days = today.getDate() - 1; // 1日〜昨日
+  // 当月は1日〜昨日、過去の月は末日まで、先の月は0日
+  const monthIndex = ym.year * 12 + ym.month, todayIndex = today.getFullYear() * 12 + today.getMonth() + 1;
+  const days = monthIndex === todayIndex ? today.getDate() - 1 : (monthIndex < todayIndex ? getDaysInMonth(ym.year, ym.month) : 0);
   if (days <= 0) return code + ': 信用残を0日分入力しました';
 
   // 1日〜昨日の信用残行を、A・B列(日付・曜日)と銘柄の3列でまとめて読み、最後にまとめて書く
@@ -1002,7 +1007,7 @@ function fillMarginForCode(code, knownCol) {
   const targets = [];
   const holidayRows = [];
   for (let d = 1; d <= days; d++) {
-    const date = new Date(today.getFullYear(), today.getMonth(), d);
+    const date = new Date(ym.year, ym.month - 1, d);
     if (date < MARGIN_DATA_START_DATE) continue;
     if (!isMarginBlank_(block[d - 1][0])) continue;
     const dow = date.getDay();
