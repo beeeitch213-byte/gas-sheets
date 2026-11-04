@@ -80,6 +80,7 @@ const STOCK_COLOR_RULE_COUNT = 7; // buildStockColorRules_ が作るルールの
  * 結果のメッセージを返す。
  */
 function rebuildStockColorRules_(sheet, onlyIfNeeded) {
+  if (!isCurrentLayoutSheet_(sheet)) return sheet.getName() + ': 昔のレイアウトのためスキップ'; // 列の位置が違う(repairOldLayoutSheets で直す)
   const cols = getStockColorCols_(sheet);
   const existing = sheet.getConditionalFormatRules();
   const managed = existing.filter(r => isStockColorRule_(r, cols));
