@@ -16,6 +16,10 @@ const PAST_SYNC_FIRST_DELAY_MS = 1000;     // 始めるときの予約(実際に
 
 const PAST_SYNC_RETRY_DELAY_MS = 60 * 1000; // 時間切れ・ほかの実行中のときの、次の予約までの時間
 
+// 実行の始めに入れておく「保険」の予約。GAS の6分の上限で実行が強制終了されても、続きがこの時間後に動く
+// (正常に終われば、終わりに予約し直すか消す)
+const PAST_SYNC_WATCHDOG_DELAY_MS = 8 * 60 * 1000;
+
 function readPastSyncState_() {
   try { return JSON.parse(PropertiesService.getScriptProperties().getProperty(PAST_SYNC_STATE_KEY) || 'null'); } catch (e) { return null; }
 }
@@ -118,12 +122,12 @@ function getPastSheetSyncStatus() {
 /** 時間主導トリガー(1回きり)から呼ばれる本体。時間切れになったら続きを予約し直す */
 function runPastSheetSync() {
   const startMs = Date.now();
-  deletePastSyncTriggers_();
+  schedulePastSheetSync_(PAST_SYNC_WATCHDOG_DELAY_MS); // 今の予約を消して保険の予約を入れる
   const lock = LockService.getScriptLock(); // この処理どうしの重なりだけを防ぐ(銘柄の列のロックは使わない。当月の操作を待たせないため)
   if (!lock.tryLock(10 * 1000)) { schedulePastSheetSync_(PAST_SYNC_RETRY_DELAY_MS); return; }
   try {
     let state = readPastSyncState_();
-    if (!state || !state.running) return;
+    if (!state || !state.running) { deletePastSyncTriggers_(); return; }
 
     const ss = SpreadsheetApp.getActiveSpreadsheet();
     const currentSheet = getTargetSheet(new Date());
@@ -159,7 +163,7 @@ function runPastSheetSync() {
       state.running = false;
       state.current = '';
       state.finishedAt = Date.now();
-      savePastSyncStateIfCurrent_(state);
+      if (savePastSyncStateIfCurrent_(state)) deletePastSyncTriggers_(); // 保険の予約も消す
     }
   } finally {
     lock.releaseLock();
@@ -180,14 +184,15 @@ function syncSheetToCurrentLayout_(sheet, order, state, startMs, historyCache) {
 
   // 2. 足りない銘柄の列を右端に足す(中身は 3. で埋める)
   const have = readStockBlocks_(sheet).map(b => b.code);
-  order.filter(o => have.indexOf(o.code) === -1).forEach(o => {
-    const col = addStockColumnToSheet(sheet, o.code, o.name, o.industry);
-    if (!col) return;
-    fillHolidayMarksForNewStock(sheet, col);
-    state.pendingFill.push({ sheet: sheetName, code: o.code });
-    savePastSyncStateIfCurrent_(state);
-  });
-  if (!savePastSyncStateIfCurrent_(state)) return false; // やり直しになった
+  // 先に「埋める予定」を保存してから列を足す(足した直後に強制終了されても、次の実行で埋められるように)。
+  // 条件付き書式は1銘柄ごとには作り直さず、5. で1回だけまとめる(ルールが多いシートでは1回に何十秒もかかるため)
+  for (const o of order.filter(o => have.indexOf(o.code) === -1)) {
+    if (timeUp()) return false;
+    if (!state.pendingFill.some(p => p.sheet === sheetName && p.code === o.code)) state.pendingFill.push({ sheet: sheetName, code: o.code });
+    if (!savePastSyncStateIfCurrent_(state)) return false; // やり直しになった
+    const col = addStockColumnToSheet(sheet, o.code, o.name, o.industry, { skipConditionalFormats: true });
+    if (col) fillHolidayMarksForNewStock(sheet, col);
+  }
 
   // 3. 足した銘柄の終値・前日比・売買代金と信用残を埋める
   const pending = state.pendingFill.filter(p => p.sheet === sheetName);

@@ -352,7 +352,8 @@ function addNewStock(code, name) {
   else { processTemplate(); processCurrentSheet(); }
 }
 
-function addStockColumnToSheet(sheet, code, name, industry) {
+// options.skipConditionalFormats: true なら条件付き書式を作り直さない(何銘柄もまとめて足すときに、最後に1回だけ作り直す用)
+function addStockColumnToSheet(sheet, code, name, industry, options) {
   const lastCol = sheet.getLastColumn();
   const codeRow = sheet.getRange(2, 1, 1, lastCol).getValues()[0];
 
@@ -406,7 +407,9 @@ function addStockColumnToSheet(sheet, code, name, industry) {
     sheet.getRange(MARGIN_HEADER_ROW, newCol, 1, STOCK_COL_WIDTH).setValues([['売残', '買残', '信倍率']]);
   }
 
-  try { addStockConditionalFormats_(sheet); } catch (e) {}
+  if (!(options && options.skipConditionalFormats)) {
+    try { addStockConditionalFormats_(sheet); } catch (e) {}
+  }
 
   return newCol;
 }
