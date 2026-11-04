@@ -682,6 +682,9 @@ function createMonthSheet_(nextYear, nextMonth, startMs) {
   });
   if (a1List.length > 0) newSheet.getRangeList(a1List).setBackground(HOLIDAY_COLOR); // 文字(休)は入れず、塗りつぶしだけ
 
+  // 市場ブロックのスパークラインはその月の分だけを表示する。テンプレートには月が無く数式が入っていないので、ここで入れる
+  setMarketValueSparklines_(newSheet, nextYear, nextMonth);
+
   blocks.forEach(b => newSheet.getRange(b.firstRow, 1, b.rows, 1).setValues(dayLabelCol.slice(0, b.rows)));
   return newSheetName + ' シートの作成が完了しました';
 }

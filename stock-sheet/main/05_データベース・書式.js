@@ -231,14 +231,24 @@ function buildSparklineFormula(dbColLetter) {
 }
 
 /**
- * 市場別売買代金(プライム/スタンダード/グロース)用: DBの指定列を、シート自身の月(当月1日〜月末)の範囲だけに絞って参照するスパークライン数式
+ * 市場別売買代金(プライム/スタンダード/グロース)用: DBの指定列を、シート自身の月(当月1日〜月末)の範囲だけに絞って参照するスパークライン数式。
+ * SPARKLINE は点が2つ以上ないと #N/A になる(月の最初の営業日は1日分しかない)ので、数値が2つそろうまでは空欄にする。
  */
 function buildMarketValueSparklineFormula(dbColLetter, year, month) {
   const dbRef = "'" + DB_SHEET_NAME + "'";
-  const startStr = Utilities.formatDate(new Date(year, month - 1, 1), 'Asia/Tokyo', 'yyyy-MM-dd');
-  return '=SPARKLINE(FILTER(' + dbRef + '!$' + dbColLetter + '$2:$' + dbColLetter
-    + ', ' + dbRef + '!$A$2:$A>=DATE(' + year + ',' + month + ',1), ' + dbRef + '!$A$2:$A<EDATE(DATE(' + year + ',' + month + ',1),1)), '
-    + '{"charttype","line";"color","#34a853";"empty","ignore"})';
+  const filter = 'FILTER(' + dbRef + '!$' + dbColLetter + '$2:$' + dbColLetter
+    + ', ' + dbRef + '!$A$2:$A>=DATE(' + year + ',' + month + ',1), ' + dbRef + '!$A$2:$A<EDATE(DATE(' + year + ',' + month + ',1),1))';
+  return '=LET(d, ' + filter + ', IF(IFERROR(COUNT(d), 0) < 2, "", '
+    + 'SPARKLINE(d, {"charttype","line";"color","#34a853";"empty","ignore"})))';
+}
+
+/** 月次シートの市場ブロック(プライム/スタンダード/グロース)の4行目に、その月のスパークラインを入れる */
+function setMarketValueSparklines_(sheet, year, month) {
+  const dbSheet = getOrCreateDatabaseSheet();
+  MARKET_VALUE_ITEMS.forEach(item => {
+    const dbCol = getOrCreateDatabaseColumn(dbSheet, item.code);
+    sheet.getRange(4, item.col).setFormula(buildMarketValueSparklineFormula(columnToLetter(dbCol), year, month));
+  });
 }
 
 /**
