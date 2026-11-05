@@ -1,0 +1,15 @@
+# 指数の定期見直し(kessan/CLAUDE.md の「指数イベント」)。タブ区切り。# で始まる行はコメント。
+# 発表日: MSCI は米国時間の日付(日本ではその翌日の朝に分かる)、日経225 は日本の日付。未定なら空欄。
+# 発効日: 新しい構成で計算が始まる日。日本株の売買が集中するのは、その前の営業日の大引け。
+# 採用・除外: 「コード 銘柄名」を「、」で区切る。日本株だけ書く。発表前は空欄。
+指数	回	発表日	発効日	採用	除外	出典
+日経225	2026年10月	2026-09-04	2026-10-01	5016 JX金属、6525 KOKUSAI ELECTRIC、9697 カプコン	4902 コニカミノルタ、543A ARCHION、7004 カナデビア	https://indexes.nikkei.co.jp/nkave/archives/news/20260904J_1.pdf
+MSCI	2026年11月	2026-11-11	2026-12-01			https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf
+MSCI	2027年2月	2027-02-09	2027-03-01			https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf
+日経225	2027年4月		2027-04-01			https://indexes.nikkei.co.jp/nkave/archives/news/20260305J_1.pdf
+MSCI	2027年5月	2027-05-10	2027-05-28			https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf
+MSCI	2027年8月	2027-08-12	2027-09-01			https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf
+MSCI	2027年11月	2027-11-11	2027-12-01			https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf
+MSCI	2028年2月	2028-02-10	2028-03-01			https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf
+MSCI	2028年5月	2028-05-11	2028-06-01			https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf
+MSCI	2028年8月	2028-08-14	2028-09-01			https://www.msci.com/eqb/pressreleases/archive/ir_dates.pdf
