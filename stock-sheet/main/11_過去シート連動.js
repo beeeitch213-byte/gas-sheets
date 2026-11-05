@@ -191,8 +191,10 @@ function runPastSheetSync() {
     }
 
     if (state.queue.length > 0) {
+      const delay = state.nextDelayMs || PAST_SYNC_RETRY_DELAY_MS; // 取得に失敗したときは長めに待つ
+      delete state.nextDelayMs;
       if (!savePastSyncStateIfCurrent_(state)) return;
-      schedulePastSheetSync_(PAST_SYNC_RETRY_DELAY_MS);
+      schedulePastSheetSync_(delay);
     } else {
       state.running = false;
       state.current = '';
@@ -362,7 +364,11 @@ const WEEKLY_MARGIN_MAX_PAGES = 4; // 1ページ20週。2026/4 からなら2ペ�
 
 const WEEKLY_MARGIN_CACHE_PREFIX = 'WEEKLY_MARGIN_'; // 取得結果を6時間キャッシュする(ほかのシートでも使い回すため)
 
-const WEEKLY_MARGIN_MAX_FAIL_STREAK = 5; // 続けてこの数の銘柄で取得に失敗したら、今回の処理では週の信用残をあきらめる
+const WEEKLY_MARGIN_MAX_FAIL_STREAK = 5; // 続けてこの回数取得に失敗したら(1回失敗するごとに少し待つ)、今回の処理では週の信用残をあきらめる
+
+const WEEKLY_MARGIN_FETCH_INTERVAL_MS = 1000; // 1銘柄取るごとに待つ時間(短い間に続けて取ると、途中から取れなくなるため)
+
+const WEEKLY_MARGIN_BACKOFF_MS = 5 * 60 * 1000; // 取れなかったときに、次の実行まで待つ時間
 
 const OLD_LAYOUT_MARGIN_MAX_WEEKS = 6; // 1か月に入る週の数の上限(39〜44行目)
 
@@ -458,6 +464,24 @@ function fetchWeeklyMarginHistory_(code, oldestKey) {
   return result;
 }
 
+/**
+ * 週の信用残をどこまでさかのぼって取るか(昔のレイアウトの残りのシートのうち、いちばん古い週)。
+ * 1銘柄1回の取得で全部のシートに使えるように、最初のシートからいちばん古い週まで取る。
+ */
+function pastSyncWeeklyOldestKey_(state) {
+  if (state.weeklyOldestKey) return state.weeklyOldestKey;
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let oldest = '';
+  state.queue.forEach(name => {
+    const sh = ss.getSheetByName(name), ym = parseYearMonthFromSheetName(name);
+    if (!sh || !ym || !isOldLayoutSheet_(sh)) return;
+    const first = oldLayoutMarginWeeksOf_(ym.year, ym.month)[0];
+    const key = first ? Utilities.formatDate(first, 'Asia/Tokyo', 'yyyy-MM-dd') : '';
+    if (key && (!oldest || key < oldest)) oldest = key;
+  });
+  return (state.weeklyOldestKey = oldest);
+}
+
 /** 週の信用残(キャッシュがあれば使う)。取れなければ null(あとで取り直す)/ 今回はあきらめるなら false */
 function getWeeklyMarginForPastSync_(code, oldestKey, state) {
   if (state.weeklyMarginOff) return false;
@@ -467,6 +491,7 @@ function getWeeklyMarginForPastSync_(code, oldestKey, state) {
     if (cached && cached.oldest <= oldestKey) return cached.data;
   } catch (e) {}
   const data = fetchWeeklyMarginHistory_(code, oldestKey);
+  Utilities.sleep(WEEKLY_MARGIN_FETCH_INTERVAL_MS);
   if (data) {
     state.weeklyFailStreak = 0;
     try { cache.put(cacheKey, JSON.stringify({ oldest: oldestKey, data: data }), 21600); } catch (e) {}
@@ -483,7 +508,7 @@ function getWeeklyMarginForPastSync_(code, oldestKey, state) {
 
 /**
  * 昔のレイアウトのシートの、週の信用残の空いているセルを埋める。最後まで終われば true、時間切れ・取り直しなら false。
- * 一度も取れなかった銘柄は、3回目の実行であきらめる(エラーに出す)。
+ * 取れなかったら、そこで止めて少し待ってから(WEEKLY_MARGIN_BACKOFF_MS)続きを取る。同じ銘柄が3回取れなければ、その銘柄はあきらめる。
  */
 function fillOldLayoutWeeklyMargin_(sheet, state, startMs) {
   const blocks = readStockBlocks_(sheet);
@@ -493,7 +518,8 @@ function fillOldLayoutWeeklyMargin_(sheet, state, startMs) {
   const values = sheet.getRange(MARGIN_FIRST_ROW, 1, weeks.length, lastCol).getValues();
   const blank = v => v === '' || v === null;
   const needs = blocks.filter(b => weeks.some((w, i) => blank(values[i][b.col - 1]) || blank(values[i][b.col])));
-  const oldestKey = weeks[0].key;
+  const wider = pastSyncWeeklyOldestKey_(state);
+  const oldestKey = (wider && wider < weeks[0].key) ? wider : weeks[0].key;
   state.weeklyFailures = state.weeklyFailures || {};
 
   const data = [];
@@ -501,7 +527,6 @@ function fillOldLayoutWeeklyMargin_(sheet, state, startMs) {
     if (data.length === 0) return;
     Sheets.Spreadsheets.Values.batchUpdate({ valueInputOption: 'RAW', data: data.splice(0) }, SpreadsheetApp.getActiveSpreadsheet().getId());
   };
-  let retryLater = false;
   for (const b of needs) {
     if (Date.now() - startMs > RUN_TIME_LIMIT_MS) { flush(); return false; }
     if ((state.weeklyFailures[b.code] || 0) >= PAST_SYNC_FETCH_MAX_FAILURES) continue;
@@ -509,9 +534,13 @@ function fillOldLayoutWeeklyMargin_(sheet, state, startMs) {
     if (history === false) break; // 今回はあきらめる
     if (history === null) {
       state.weeklyFailures[b.code] = (state.weeklyFailures[b.code] || 0) + 1;
-      if (state.weeklyFailures[b.code] >= PAST_SYNC_FETCH_MAX_FAILURES) state.errors.push(b.code + ': 週の信用残を取得できませんでした');
-      else retryLater = true;
-      continue;
+      if (state.weeklyFailures[b.code] >= PAST_SYNC_FETCH_MAX_FAILURES) {
+        state.errors.push(b.code + ': 週の信用残を取得できませんでした');
+        continue;
+      }
+      flush();
+      state.nextDelayMs = WEEKLY_MARGIN_BACKOFF_MS; // 少し待ってから続きを取る
+      return false;
     }
     delete state.weeklyFailures[b.code];
     let changed = false;
@@ -535,7 +564,7 @@ function fillOldLayoutWeeklyMargin_(sheet, state, startMs) {
     const formatRow = Array.from({ length: width }, (_, i) => (i % STOCK_COL_WIDTH === 2) ? '#,##0.00' : '#,##0');
     sheet.getRange(MARGIN_FIRST_ROW, OLD_LAYOUT_STOCK_START_COL, weeks.length, width).setNumberFormats(weeks.map(() => formatRow));
   }
-  return !retryLater;
+  return true;
 }
 
 // ==== 昔のレイアウトの月次シートの修理(1回だけ使う) ====
