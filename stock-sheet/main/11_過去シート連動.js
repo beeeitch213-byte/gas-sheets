@@ -517,7 +517,11 @@ function fillOldLayoutWeeklyMargin_(sheet, state, startMs) {
   const lastCol = blocks[blocks.length - 1].col + STOCK_COL_WIDTH - 1;
   const values = sheet.getRange(MARGIN_FIRST_ROW, 1, weeks.length, lastCol).getValues();
   const blank = v => v === '' || v === null;
-  const needs = blocks.filter(b => weeks.some((w, i) => blank(values[i][b.col - 1]) || blank(values[i][b.col])));
+  // どの銘柄にもデータが無い週(取り先に無い週。例: 2026/5/8)は見ない(毎回全銘柄を取りに行かないように)。
+  // ただし、まだどの週も埋まっていないシートは全部の週を見る
+  const hasAny = weeks.map((w, i) => blocks.some(b => !blank(values[i][b.col - 1])));
+  const rowsToCheck = weeks.map((w, i) => i).filter(i => hasAny[i] || !hasAny.some(x => x));
+  const needs = blocks.filter(b => rowsToCheck.some(i => blank(values[i][b.col - 1]) || blank(values[i][b.col])));
   const wider = pastSyncWeeklyOldestKey_(state);
   const oldestKey = (wider && wider < weeks[0].key) ? wider : weeks[0].key;
   state.weeklyFailures = state.weeklyFailures || {};
